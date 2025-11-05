@@ -28,6 +28,7 @@ A command-line tool that provides personalized code review and tutoring by analy
   ```json
   {
     "api_key": "sk-ant-...",
+    "model": "claude-sonnet-4-5",
     "experience_level": "intermediate",
     "preferences": {
       "question_style": "socratic",
@@ -70,7 +71,9 @@ A command-line tool that provides personalized code review and tutoring by analy
 1. User runs `code-tutor setup`
 2. Tool prompts for:
    - Anthropic API key
+   - Claude model selection (Sonnet 4.5 or Haiku 4.5)
    - Experience level (beginner/intermediate/advanced/expert)
+   - Question style (socratic/direct/exploratory)
    - Preferred focus areas
 3. Configuration saved to `~/.config/code-tutor/config.json`
 
@@ -148,6 +151,10 @@ Format your response as:
 - Reference best practices critically
 
 ## Configuration Options
+
+### Available Models
+- `claude-sonnet-4-5`: Balanced performance and capability (default)
+- `claude-haiku-4-5`: Fastest and most cost-effective
 
 ### Experience Levels
 - `beginner`: 0-1 years programming
