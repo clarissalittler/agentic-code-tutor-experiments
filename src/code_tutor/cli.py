@@ -84,12 +84,12 @@ def setup(config_dir: Optional[str]):
     console.print("\n[bold]Step 2: Claude Model[/bold]")
     console.print("[dim]Choose which Claude model to use for code review.[/dim]\n")
 
-    for i, model in enumerate(ConfigManager.AVAILABLE_MODELS, 1):
-        console.print(f"  {i}. {model}")
+    console.print("  1. claude-sonnet-4-5 - Balanced performance and capability")
+    console.print("  2. claude-haiku-4-5 - Fastest and most cost-effective\n")
 
     model_choice = Prompt.ask(
-        "\nChoose your model",
-        choices=["1", "2", "3", "4"],
+        "Choose your model",
+        choices=["1", "2"],
         default="1",
     )
     model = ConfigManager.AVAILABLE_MODELS[int(model_choice) - 1]
