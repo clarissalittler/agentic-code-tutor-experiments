@@ -22,9 +22,16 @@ class ConfigManager:
         "testing",
         "documentation",
     ]
+    AVAILABLE_MODELS = [
+        "claude-sonnet-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
+        "claude-3-haiku-20240307",
+    ]
 
     DEFAULT_CONFIG = {
         "api_key": "",
+        "model": "claude-sonnet-4-5",
         "experience_level": "intermediate",
         "preferences": {
             "question_style": "socratic",
@@ -170,3 +177,22 @@ class ConfigManager:
             True if valid, False otherwise.
         """
         return area in self.FOCUS_AREAS
+
+    def validate_model(self, model: str) -> bool:
+        """Validate a model name.
+
+        Args:
+            model: Model name to validate.
+
+        Returns:
+            True if valid, False otherwise.
+        """
+        return model in self.AVAILABLE_MODELS
+
+    def get_model(self) -> str:
+        """Get the configured model.
+
+        Returns:
+            Model name string.
+        """
+        return self.get("model", "claude-sonnet-4-5")

@@ -80,8 +80,22 @@ def setup(config_dir: Optional[str]):
         console.print("[red]API key is required. Setup cancelled.[/red]")
         return
 
+    # Get model preference
+    console.print("\n[bold]Step 2: Claude Model[/bold]")
+    console.print("[dim]Choose which Claude model to use for code review.[/dim]\n")
+
+    for i, model in enumerate(ConfigManager.AVAILABLE_MODELS, 1):
+        console.print(f"  {i}. {model}")
+
+    model_choice = Prompt.ask(
+        "\nChoose your model",
+        choices=["1", "2", "3", "4"],
+        default="1",
+    )
+    model = ConfigManager.AVAILABLE_MODELS[int(model_choice) - 1]
+
     # Get experience level
-    console.print("\n[bold]Step 2: Your Programming Experience[/bold]")
+    console.print("\n[bold]Step 3: Your Programming Experience[/bold]")
     console.print("[dim]This helps tailor feedback to your skill level.[/dim]\n")
 
     for i, level in enumerate(ConfigManager.EXPERIENCE_LEVELS, 1):
@@ -95,7 +109,7 @@ def setup(config_dir: Optional[str]):
     experience_level = ConfigManager.EXPERIENCE_LEVELS[int(experience_choice) - 1]
 
     # Get question style
-    console.print("\n[bold]Step 3: Preferred Question Style[/bold]")
+    console.print("\n[bold]Step 4: Preferred Question Style[/bold]")
     console.print("[dim]How would you like me to interact with you?[/dim]\n")
 
     console.print("  1. Socratic - Guide you to discover insights through questions")
@@ -110,7 +124,7 @@ def setup(config_dir: Optional[str]):
     question_style = ConfigManager.QUESTION_STYLES[int(style_choice) - 1]
 
     # Get focus areas
-    console.print("\n[bold]Step 4: Focus Areas[/bold]")
+    console.print("\n[bold]Step 5: Focus Areas[/bold]")
     console.print("[dim]What aspects of code are most important to you?[/dim]")
     console.print("[dim]Enter numbers separated by commas (e.g., 1,2,4)[/dim]\n")
 
@@ -138,6 +152,7 @@ def setup(config_dir: Optional[str]):
     # Save configuration
     new_config = {
         "api_key": api_key.strip(),
+        "model": model,
         "experience_level": experience_level,
         "preferences": {
             "question_style": question_style,
@@ -224,6 +239,17 @@ def config(config_dir: Optional[str]):
         console.print()
 
         console.print(f"[cyan]Config file:[/cyan] {config_manager.config_path}")
+
+        api_key = config_data.get("api_key", "")
+        if api_key:
+            masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
+            console.print(f"[cyan]API key:[/cyan] {masked}")
+        else:
+            console.print("[cyan]API key:[/cyan] [red]Not set[/red]")
+
+        console.print(
+            f"[cyan]Model:[/cyan] {config_data.get('model', 'claude-sonnet-4-5')}"
+        )
         console.print(
             f"[cyan]Experience level:[/cyan] {config_data.get('experience_level', 'Not set')}"
         )
@@ -233,13 +259,6 @@ def config(config_dir: Optional[str]):
         console.print(
             f"[cyan]Focus areas:[/cyan] {', '.join(prefs.get('focus_areas', []))}"
         )
-
-        api_key = config_data.get("api_key", "")
-        if api_key:
-            masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
-            console.print(f"[cyan]API key:[/cyan] {masked}")
-        else:
-            console.print("[cyan]API key:[/cyan] [red]Not set[/red]")
 
         console.print()
         if Confirm.ask("Would you like to reconfigure?", default=False):

@@ -36,11 +36,12 @@ class ReviewSession:
             # Load configuration
             config = self.config.load()
             api_key = self.config.get_api_key()
+            model = self.config.get_model()
             experience_level = self.config.get("experience_level", "intermediate")
             preferences = self.config.get("preferences", {})
 
             # Initialize analyzer
-            self.analyzer = CodeAnalyzer(api_key)
+            self.analyzer = CodeAnalyzer(api_key, model)
 
             # Read the file
             self.console.print(f"\n[cyan]Reading file:[/cyan] {file_path}")

@@ -52,6 +52,7 @@ code-tutor setup
 
 You'll be prompted to provide:
 - Your Anthropic API key
+- Your preferred Claude model (Sonnet 4.5, Sonnet 3.5, Opus, or Haiku)
 - Your programming experience level (beginner/intermediate/advanced/expert)
 - Your preferred question style (socratic/direct/exploratory)
 - Focus areas for feedback (design, readability, performance, etc.)
@@ -101,6 +102,7 @@ Configuration is stored in `~/.config/code-tutor/config.json`:
 ```json
 {
   "api_key": "your-api-key",
+  "model": "claude-sonnet-4-5",
   "experience_level": "intermediate",
   "preferences": {
     "question_style": "socratic",
@@ -122,6 +124,14 @@ Configuration is stored in `~/.config/code-tutor/config.json`:
 - **Socratic**: Guides you to discover insights through leading questions
 - **Direct**: Straightforward, specific questions about the code
 - **Exploratory**: Open-ended questions about alternatives and trade-offs
+
+### Available Models
+
+Choose which Claude model to use for code review:
+- **claude-sonnet-4-5** (default): Latest Sonnet model with excellent performance
+- **claude-3-5-sonnet-20241022**: Previous Sonnet 3.5 version
+- **claude-3-opus-20240229**: Most capable model for complex analysis
+- **claude-3-haiku-20240307**: Fastest and most cost-effective option
 
 ### Focus Areas
 
