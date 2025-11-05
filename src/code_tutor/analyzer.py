@@ -7,7 +7,7 @@ import anthropic
 class CodeAnalyzer:
     """Analyzes code using Claude API with educational, respectful approach."""
 
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5"):
         """Initialize the code analyzer.
 
         Args:
