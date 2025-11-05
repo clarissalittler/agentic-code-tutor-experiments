@@ -1,0 +1,6 @@
+* Messy ideas
+** Idea 1: General code analyzer
+A command line tool that asks for the path to files to review, reads them, then asks a series of questions to clarify design decisions and understand the style of the programmer and not disrespect those intentions while still be helpful.
+
+This should be configurable with an API key. You should also be able to seed your experience level as a programmer on first use and this should be stored in the configuration.
+
