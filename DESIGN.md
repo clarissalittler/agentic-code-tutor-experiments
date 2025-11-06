@@ -1,13 +1,17 @@
 # Code Tutor - Design Document
 
 ## Overview
-A command-line tool that provides personalized code review and tutoring by analyzing code files and engaging in interactive dialogue with the programmer.
+A command-line tool that provides two modes of learning:
+
+1. **Code Review Mode**: Personalized code review by analyzing code files and engaging in interactive dialogue
+2. **Teaching Mode (Teach Me!)**: Socratic learning through correcting intentionally flawed code
 
 ## Core Principles
 1. **Respectful**: Understand and respect the programmer's style and intentions
 2. **Educational**: Ask clarifying questions to understand design decisions
 3. **Adaptive**: Tailor feedback to the programmer's experience level
 4. **Interactive**: Engage in dialogue rather than one-way criticism
+5. **Socratic**: Learn by teaching - identify and explain mistakes in code
 
 ## Architecture
 
@@ -56,14 +60,23 @@ A command-line tool that provides personalized code review and tutoring by analy
 - Tracks user responses
 - Adapts follow-up questions based on answers
 
-#### 5. CLI Interface (`cli.py`)
+#### 5. Teaching Session (`teaching_session.py`)
+- Manages Socratic teaching mode (Teach Me!)
+- Generates intentionally flawed code with clever mistakes
+- Collects user's explanation of issues
+- Evaluates understanding using Claude API
+- Iteratively refines examples based on user's comprehension
+- Tracks teaching rounds and progression
+
+#### 6. CLI Interface (`cli.py`)
 - Entry point for the application
 - Command structure:
   - `code-tutor setup` - Initial configuration
   - `code-tutor review <file>` - Review a single file
   - `code-tutor review <dir>` - Review multiple files
+  - `code-tutor teach-me` - Interactive teaching mode
   - `code-tutor config` - Update configuration
-  - `code-tutor chat` - Continue conversation about last review
+  - `code-tutor info` - Show information
 
 ### User Flow
 
@@ -95,6 +108,24 @@ A command-line tool that provides personalized code review and tutoring by analy
 6. Follow-up phase:
    - Allow user to ask questions
    - Dive deeper into specific topics
+
+#### Teaching Session (Teach Me!)
+1. User runs `code-tutor teach-me`
+2. Topic selection:
+   - User specifies what they want to learn (e.g., "recursion")
+   - User selects programming language
+3. Teaching rounds (iterative):
+   - **Generate flawed code**: AI creates code with intentional, instructive mistakes
+   - **Present code**: Display with syntax highlighting
+   - **Collect explanation**: User explains what's wrong and why
+   - **Evaluate understanding**: AI assesses explanation quality
+   - **Provide feedback**: Constructive feedback on the explanation
+   - **Decision point**:
+     - If understanding achieved → Move to next concept or end
+     - If needs refinement → Generate related example to deepen understanding
+4. Conclusion:
+   - Summary of learning progress
+   - Encouragement to continue practicing
 
 ### LLM Prompting Strategy
 

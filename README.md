@@ -6,12 +6,24 @@ This repository is a place to experiment with building command-line and local we
 
 ## Overview
 
-Code Tutor is designed to provide personalized, educational code reviews that respect your programming style and experience level. Unlike traditional linters or code reviewers that simply point out issues, Code Tutor:
+Code Tutor provides two powerful learning modes:
+
+### 1. Code Review Mode
+Personalized, educational code reviews that respect your programming style and experience level. Unlike traditional linters or code reviewers that simply point out issues, Code Tutor:
 
 - **Asks questions** to understand your design decisions before providing feedback
 - **Respects your style** and intentions while offering helpful suggestions
 - **Adapts to your level** - whether you're a beginner or an expert
 - **Encourages learning** through interactive dialogue
+
+### 2. Teaching Mode (Teach Me!)
+Learn by correcting mistakes through the Socratic method:
+
+- **Presents flawed code** with intentional, clever mistakes
+- **You explain** what's wrong and why it's a problem
+- **AI evaluates** your understanding and provides feedback
+- **Iterative learning** - dig deeper if your explanation needs refinement
+- **Topic-focused** - Choose what you want to learn about
 
 ## Features
 
@@ -21,6 +33,7 @@ Code Tutor is designed to provide personalized, educational code reviews that re
 - 💬 **Conversational** - Ask follow-up questions and dive deeper
 - 🔧 **Configurable** - Set your preferences for question style and focus areas
 - 📁 **Multi-file support** - Review individual files or entire directories
+- 🧑‍🏫 **Teach Me Mode** - Learn by teaching and correcting flawed code
 
 ## Installation
 
@@ -77,7 +90,26 @@ Review without recursing into subdirectories:
 code-tutor review --no-recursive path/to/directory/
 ```
 
-### 3. Interactive Session
+### 3. Learn with Teach Me Mode
+
+Start an interactive teaching session:
+
+```bash
+code-tutor teach-me
+```
+
+In this mode:
+
+1. Choose a topic you want to learn (e.g., "recursion", "async/await", "design patterns")
+2. Select your preferred programming language
+3. The AI presents intentionally flawed code
+4. You explain what's wrong and why
+5. The AI evaluates your understanding and provides feedback
+6. If needed, it presents a refined example to deepen your learning
+
+This Socratic method helps you learn by teaching - one of the most effective ways to master concepts!
+
+### 4. Interactive Review Session
 
 When you review code, Code Tutor will:
 
@@ -141,7 +173,9 @@ Choose what matters most to you:
 - **Testing**: Test coverage and quality
 - **Documentation**: Comments and documentation
 
-## Example Session
+## Example Sessions
+
+### Code Review Session
 
 ```bash
 $ code-tutor review calculator.py
@@ -196,6 +230,89 @@ Your question: What's the best way to handle the division by zero error?
 ...
 ```
 
+### Teaching Session (Teach Me!)
+
+```bash
+$ code-tutor teach-me
+
+╭─────────────────────── 🎓 Teaching Mode ───────────────────────╮
+│ Welcome to Teach Me!                                            │
+│                                                                 │
+│ In this mode, I'll show you code with intentional mistakes.    │
+│ Your job is to identify and explain what's wrong.              │
+│                                                                 │
+│ The better your explanation, the more we'll learn together!    │
+│ If your explanation needs refinement, I'll adjust the code     │
+│ and we'll dig deeper into the concept.                         │
+╰─────────────────────────────────────────────────────────────────╯
+
+What would you like to learn about?
+Examples: recursion, async/await, design patterns, memory management
+
+Topic: recursion
+
+Great! Let's explore recursion together.
+
+Which programming language would you like to use?
+Examples: Python, JavaScript, Java, C++, Go, Rust
+
+Language [Python]:
+
+════════════════════════════════════════════════════════════════
+Round 1
+════════════════════════════════════════════════════════════════
+
+Here's some code for you to review:
+
+╭────────────────────── Code ──────────────────────╮
+│  1 def factorial(n):                              │
+│  2     if n == 0:                                 │
+│  3         return 1                               │
+│  4     return n * factorial(n)                    │
+╰───────────────────────────────────────────────────╯
+
+What's wrong with this code? Please explain:
+(Be specific about what the issue is and why it's a problem)
+
+Your explanation: The base case checks if n equals 0, but the recursive
+call doesn't decrement n, so it will call factorial(n) infinitely and
+cause a stack overflow.
+
+Teacher's Feedback:
+
+╭─────────────────────────────────────────────────╮
+│ ## Evaluation                                    │
+│                                                  │
+│ Excellent! You've correctly identified the      │
+│ critical issue.                                  │
+│                                                  │
+│ ## Feedback                                      │
+│                                                  │
+│ ✓ You identified that n doesn't change          │
+│ ✓ You recognized this causes infinite recursion │
+│ ✓ You understood the consequence (stack         │
+│   overflow)                                      │
+│                                                  │
+│ Your explanation demonstrates solid             │
+│ understanding of how recursion works and what   │
+│ happens when the recursive call doesn't         │
+│ progress toward the base case.                  │
+│                                                  │
+│ ## Understanding Achieved                        │
+│ YES                                              │
+╰─────────────────────────────────────────────────╯
+
+Excellent! You've demonstrated solid understanding of this aspect.
+
+Continue with another example? [y/N]: y
+
+════════════════════════════════════════════════════════════════
+Round 2
+════════════════════════════════════════════════════════════════
+
+[...continues with more examples...]
+```
+
 ## Supported Languages
 
 Code Tutor supports reviewing code in:
@@ -211,16 +328,17 @@ agentic-code-tutor-experiments/
 ├── src/
 │   └── code_tutor/
 │       ├── __init__.py
-│       ├── cli.py           # Command-line interface
-│       ├── config.py        # Configuration management
-│       ├── file_reader.py   # File reading and parsing
-│       ├── analyzer.py      # Code analysis with Claude API
-│       └── session.py       # Interactive session management
-├── tests/                   # Test files (coming soon)
-├── DESIGN.md               # Detailed design documentation
-├── plan.org                # Project planning and ideas
-├── pyproject.toml          # Project configuration
-└── README.md              # This file
+│       ├── cli.py              # Command-line interface
+│       ├── config.py           # Configuration management
+│       ├── file_reader.py      # File reading and parsing
+│       ├── analyzer.py         # Code analysis with Claude API
+│       ├── session.py          # Code review session management
+│       └── teaching_session.py # Teaching mode (Teach Me!)
+├── tests/                      # Test files (coming soon)
+├── DESIGN.md                  # Detailed design documentation
+├── plan.org                   # Project planning and ideas
+├── pyproject.toml             # Project configuration
+└── README.md                  # This file
 ```
 
 ### Running in Development Mode
