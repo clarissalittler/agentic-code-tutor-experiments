@@ -11,6 +11,7 @@ from rich.prompt import Prompt, Confirm
 
 from .config import ConfigManager
 from .session import ReviewSession
+from .teaching_session import TeachingSession
 
 
 console = Console()
@@ -218,6 +219,40 @@ def review(path: str, recursive: bool, config_dir: Optional[str]):
         sys.exit(1)
 
 
+@main.command("teach-me")
+@click.option(
+    "--config-dir",
+    type=click.Path(),
+    default=None,
+    help="Custom configuration directory path",
+)
+def teach_me(config_dir: Optional[str]):
+    """Interactive teaching mode - learn by correcting mistakes.
+
+    In this mode, the AI presents intentionally flawed code and asks you
+    to identify and explain what's wrong. This Socratic method helps you
+    learn by teaching and correcting mistakes.
+    """
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    # Check if configured
+    try:
+        config_manager.load()
+        if not config_manager.is_configured():
+            console.print(
+                "[red]Error:[/red] Code Tutor is not configured.\n"
+                "Run 'code-tutor setup' first."
+            )
+            sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error loading configuration:[/red] {e}")
+        sys.exit(1)
+
+    # Start teaching session
+    session = TeachingSession(config_manager, console)
+    session.start_session()
+
+
 @main.command()
 @click.option(
     "--config-dir",
@@ -292,6 +327,7 @@ def info(config_dir: Optional[str]):
         "[bold]Commands:[/bold]\n"
         "• setup    - Configure your API key and preferences\n"
         "• review   - Review a file or directory\n"
+        "• teach-me - Learn by correcting intentionally flawed code\n"
         "• config   - View/update configuration\n"
         "• info     - Show this information\n\n"
         "[bold]Learn more:[/bold]\n"

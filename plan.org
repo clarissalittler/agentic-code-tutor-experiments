@@ -48,9 +48,45 @@ code-tutor config
 #+end_src
 
 
-** TODO Idea 2: Teach me!
+** DONE Idea 2: Teach me!
+CLOSED: [2025-11-05]
+
 This should be an LLM mode that lets the user name a topic to talk about and then engages in a back and forth where it asks /the user/ to explain the topic by showing them (mistaken, misconcepted) code and then asking the user to identify what's wrong with it. This should be a separate tool than the reviewer, invoked by =code-tutor teach-me=.
 
 The LLM should really work to be /cleverly/, instructively, wrong: make students have to /think/ about what's wrong and explain it.
 
 If the LLM judges the explanation insufficiently precise, then "correct" the code so that it's still "cleverly" wrong and ask for further instruction the user until it's done.
+
+*** Implementation Status
+- [X] Teaching session module with Socratic method
+- [X] CLI command: =code-tutor teach-me=
+- [X] Topic and language selection
+- [X] Intentional mistake generation with clever, instructive errors
+- [X] User explanation collection
+- [X] AI evaluation of explanation quality
+- [X] Iterative refinement based on understanding
+- [X] Multiple teaching rounds (up to 5)
+- [X] Rich formatted output with syntax highlighting
+- [X] Comprehensive documentation and examples
+
+*** Key Features
+- Socratic teaching approach - learn by identifying and explaining mistakes
+- Dynamically generated flawed code specific to chosen topic
+- Evaluation system that assesses depth of understanding
+- Iterative learning - continues until concept is mastered
+- Adaptive difficulty based on experience level
+- Support for any programming language
+
+*** Usage
+#+begin_src bash
+# Start teaching mode
+code-tutor teach-me
+
+# Example session:
+# 1. Enter topic (e.g., "recursion", "async/await")
+# 2. Choose language (e.g., "Python")
+# 3. Review flawed code
+# 4. Explain what's wrong
+# 5. Get feedback
+# 6. Continue with more examples or finish
+#+end_src
