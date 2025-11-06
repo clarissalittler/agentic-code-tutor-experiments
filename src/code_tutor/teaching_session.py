@@ -68,11 +68,11 @@ class TeachingSession:
         """Display welcome message."""
         self.console.print(Panel.fit(
             "[bold cyan]Welcome to Teach Me![/bold cyan]\n\n"
-            "In this mode, I'll show you code with intentional mistakes.\n"
-            "Your job is to identify and explain what's wrong.\n\n"
-            "The better your explanation, the more we'll learn together!\n"
-            "If your explanation needs refinement, I'll adjust the code\n"
-            "and we'll dig deeper into the concept.",
+            "In this mode, I'll roleplay as a student who's stuck on some code.\n"
+            "I'll show you what I tried, what went wrong, and ask for your help.\n\n"
+            "As the teacher, guide me with hints and questions rather than\n"
+            "giving away the answer directly. Help me discover the solution myself!\n\n"
+            "The better your hints, the more we'll both learn together!",
             border_style="cyan",
             title="🎓 Teaching Mode"
         ))
@@ -132,8 +132,8 @@ class TeachingSession:
                 self.console.print("[yellow]Failed to generate code. Ending session.[/yellow]")
                 break
 
-            # Display the code
-            self._display_code(code_data["code"], language)
+            # Display the code and student question
+            self._display_code(code_data["code"], code_data.get("student_question", ""), language)
 
             # Get user's explanation
             explanation = self._get_user_explanation()
@@ -157,14 +157,14 @@ class TeachingSession:
             # Check if we should continue
             if evaluation.get("understanding_achieved", False):
                 self.console.print(
-                    "\n[green]Excellent! You've demonstrated solid understanding of this aspect.[/green]"
+                    "\n[green]Great teaching! The student has reached understanding through your hints.[/green]"
                 )
 
-                if not Confirm.ask("\n[cyan]Continue with another example?[/cyan]", default=True):
+                if not Confirm.ask("\n[cyan]Help another student with a new problem?[/cyan]", default=True):
                     break
             else:
                 self.console.print(
-                    "\n[yellow]Let's refine our understanding with a related example...[/yellow]"
+                    "\n[yellow]The student needs more guidance. Let's try another related example...[/yellow]"
                 )
 
     def _generate_flawed_code(self, experience_level: str, language: str) -> Optional[Dict]:
@@ -218,7 +218,7 @@ class TeachingSession:
             # Later rounds - nuanced mistakes
             difficulty = "nuanced and requiring deep understanding"
 
-        return f"""You are a Socratic teacher helping a {experience_level} programmer learn about {self.topic}.
+        return f"""You are roleplaying as a {experience_level} programmer student who needs help with {self.topic}.
 
 Your task: Create a SHORT code example in {language} (5-15 lines) that demonstrates a {difficulty} mistake related to {self.topic}.
 
@@ -234,12 +234,19 @@ Format your response as:
 [your flawed code here]
 ```
 
+## Student Question
+[Write a short, authentic message from the student perspective. Include:
+- What they were trying to accomplish
+- What happened when they ran it (error message, unexpected output, or weird behavior)
+- A specific question asking for help
+Example: "I tried running this code to X, but I got this error: [error message]. Can you help me understand what's going wrong?"]
+
 ## Hidden Issues
 [Bullet list of what's wrong - this is for your internal tracking]
 - Issue 1
 - Issue 2
 
-Remember: Make the mistake educational and thought-provoking!"""
+Remember: Make the student question authentic and include helpful hints like error messages or unexpected behavior!"""
 
     def _parse_code_response(self, response: str) -> Dict:
         """Parse the code generation response.
@@ -248,13 +255,15 @@ Remember: Make the mistake educational and thought-provoking!"""
             response: Raw response from Claude.
 
         Returns:
-            Dictionary with code and issues.
+            Dictionary with code, student_question, and issues.
         """
         lines = response.split("\n")
         code_lines = []
+        student_question_lines = []
         issues = []
 
         in_code_block = False
+        in_student_question = False
         in_issues = False
 
         for line in lines:
@@ -262,14 +271,23 @@ Remember: Make the mistake educational and thought-provoking!"""
                 in_code_block = not in_code_block
                 continue
 
-            if "## Hidden Issues" in line or "## Issues" in line:
-                in_issues = True
-                continue
-            elif line.startswith("##") and in_issues:
+            if "## Student Question" in line:
+                in_student_question = True
                 in_issues = False
+                continue
+            elif "## Hidden Issues" in line or "## Issues" in line:
+                in_issues = True
+                in_student_question = False
+                continue
+            elif line.startswith("##"):
+                in_student_question = False
+                if in_issues:
+                    in_issues = False
 
             if in_code_block:
                 code_lines.append(line)
+            elif in_student_question and line.strip():
+                student_question_lines.append(line.strip())
             elif in_issues and line.strip():
                 cleaned = line.lstrip("*-•").strip()
                 if cleaned:
@@ -277,32 +295,45 @@ Remember: Make the mistake educational and thought-provoking!"""
 
         return {
             "code": "\n".join(code_lines),
+            "student_question": " ".join(student_question_lines),
             "issues": issues
         }
 
-    def _display_code(self, code: str, language: str) -> None:
-        """Display code with syntax highlighting.
+    def _display_code(self, code: str, student_question: str, language: str) -> None:
+        """Display code with syntax highlighting and student's question.
 
         Args:
             code: Code to display.
+            student_question: The student's question about the code.
             language: Programming language.
         """
-        self.console.print("[bold]Here's some code for you to review:[/bold]\n")
+        # Display student's question in a speech bubble style
+        self.console.print(Panel.fit(
+            f"[italic]{student_question}[/italic]",
+            border_style="yellow",
+            title="🧑‍💻 Student Question",
+            subtitle="(What hints can you give?)"
+        ))
+        self.console.print()
 
+        # Display the code
         syntax = Syntax(code, language.lower(), theme="monokai", line_numbers=True)
-        self.console.print(Panel(syntax, border_style="blue", title="Code"))
+        self.console.print(Panel(syntax, border_style="blue", title="Student's Code"))
         self.console.print()
 
     def _get_user_explanation(self) -> str:
-        """Get the user's explanation of what's wrong.
+        """Get the user's teaching response with hints.
 
         Returns:
-            The user's explanation.
+            The user's hints and guidance.
         """
-        self.console.print("[bold]What's wrong with this code? Please explain:[/bold]")
-        self.console.print("[dim](Be specific about what the issue is and why it's a problem)[/dim]\n")
+        self.console.print("[bold]How will you guide this student? Provide hints:[/bold]")
+        self.console.print(
+            "[dim]Give hints, ask leading questions, or point them in the right direction.\n"
+            "Remember: Don't just give the answer - help them discover it![/dim]\n"
+        )
 
-        explanation = Prompt.ask("Your explanation")
+        explanation = Prompt.ask("Your teaching response")
 
         return explanation
 
@@ -326,9 +357,9 @@ Remember: Make the mistake educational and thought-provoking!"""
         Returns:
             Evaluation dictionary.
         """
-        prompt = f"""You are evaluating a {experience_level} programmer's understanding of {self.topic}.
+        prompt = f"""You are roleplaying as a {experience_level} programmer student learning about {self.topic}. The user is acting as your teacher.
 
-Code shown:
+You showed this code:
 ```{language.lower()}
 {code}
 ```
@@ -336,25 +367,25 @@ Code shown:
 Known issues in the code:
 {chr(10).join(f"- {issue}" for issue in expected_issues)}
 
-Student's explanation:
+Teacher's hints/guidance:
 "{user_explanation}"
 
-Evaluate their explanation:
-1. Did they identify the core issue?
-2. Is their explanation technically accurate?
-3. Do they understand WHY it's a problem?
-4. What aspects could be explained more precisely?
+Evaluate the teacher's hints:
+1. Did they give helpful hints without revealing the full answer?
+2. Were the hints specific enough to guide you toward the solution?
+3. Did they ask good guiding questions that promote discovery?
+4. How well did they balance between being helpful and letting you learn?
 
-Respond in this format:
+Respond as the student, staying in character:
 
-## Evaluation
-[Your assessment of their understanding]
+## Student Response
+[React to their hints. If the hints were good, show you're getting closer to understanding. If they directly gave the answer, acknowledge you got it but note it would have been better to discover it yourself. If hints were too vague, ask for clarification.]
 
-## Feedback
-[Constructive feedback - what they got right, what needs refinement]
+## Teaching Quality Assessment
+[Brief internal note on teaching quality: Were the hints appropriately scaffolded? Did they promote active learning?]
 
 ## Understanding Achieved
-[YES if they demonstrated solid understanding, NO if we should dig deeper]"""
+[YES if the student has reached understanding through good hints, NO if more scaffolding is needed]"""
 
         try:
             response = self.client.messages.create(
@@ -397,10 +428,10 @@ Respond in this format:
         Args:
             evaluation: Evaluation dictionary.
         """
-        self.console.print("\n[bold cyan]Teacher's Feedback:[/bold cyan]\n")
+        self.console.print("\n[bold yellow]Student's Response:[/bold yellow]\n")
 
         md = Markdown(evaluation.get("feedback", "No feedback available"))
-        self.console.print(Panel(md, border_style="green"))
+        self.console.print(Panel(md, border_style="green", title="🧑‍💻 After Your Hints"))
 
     def _display_conclusion(self) -> None:
         """Display conclusion message."""
