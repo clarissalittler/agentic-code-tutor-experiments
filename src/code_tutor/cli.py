@@ -273,7 +273,8 @@ def teach_me(config_dir: Optional[str]):
     default=None,
     help="Custom configuration directory path",
 )
-def config(config_dir: Optional[str]):
+@click.pass_context
+def config(ctx, config_dir: Optional[str]):
     """View or update configuration."""
     config_manager = ConfigManager(Path(config_dir) if config_dir else None)
 
@@ -317,10 +318,8 @@ def config(config_dir: Optional[str]):
 
         console.print()
         if Confirm.ask("Would you like to reconfigure?", default=False):
-            # Re-run setup
-            from click.testing import CliRunner
-            runner = CliRunner()
-            setup.invoke(runner.make_context('setup', ['--config-dir', config_dir] if config_dir else []))
+            # Re-run setup using Click's context
+            ctx.invoke(setup, config_dir=config_dir)
 
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
