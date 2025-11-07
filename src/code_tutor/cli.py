@@ -12,6 +12,7 @@ from rich.prompt import Prompt, Confirm
 from .config import ConfigManager
 from .session import ReviewSession
 from .teaching_session import TeachingSession
+from .logger import SessionLogger
 
 
 console = Console()
@@ -150,6 +151,13 @@ def setup(config_dir: Optional[str]):
         console.print("[yellow]Invalid input, using default focus areas.[/yellow]")
         focus_areas = ["design", "readability"]
 
+    # Get logging preferences
+    console.print("\n[bold]Step 6: Logging Preferences[/bold]")
+    console.print("[dim]Enable logging to record student interactions for debugging.[/dim]")
+    console.print("[dim]Logs can be exported with 'code-tutor export-logs'[/dim]\n")
+
+    enable_logging = Confirm.ask("Enable interaction logging?", default=False)
+
     # Save configuration
     new_config = {
         "api_key": api_key.strip(),
@@ -159,6 +167,11 @@ def setup(config_dir: Optional[str]):
             "question_style": question_style,
             "verbosity": "medium",
             "focus_areas": focus_areas,
+        },
+        "logging": {
+            "enabled": enable_logging,
+            "log_interactions": True,
+            "log_api_calls": False,
         },
     }
 
@@ -295,6 +308,13 @@ def config(config_dir: Optional[str]):
             f"[cyan]Focus areas:[/cyan] {', '.join(prefs.get('focus_areas', []))}"
         )
 
+        # Show logging settings
+        logging_config = config_data.get("logging", {})
+        logging_enabled = logging_config.get("enabled", False)
+        console.print(
+            f"[cyan]Logging:[/cyan] {'[green]Enabled[/green]' if logging_enabled else '[red]Disabled[/red]'}"
+        )
+
         console.print()
         if Confirm.ask("Would you like to reconfigure?", default=False):
             # Re-run setup
@@ -325,15 +345,98 @@ def info(config_dir: Optional[str]):
         "• Respectful of your programming style and intentions\n"
         "• Powered by Claude AI\n\n"
         "[bold]Commands:[/bold]\n"
-        "• setup    - Configure your API key and preferences\n"
-        "• review   - Review a file or directory\n"
-        "• teach-me - Learn by correcting intentionally flawed code\n"
-        "• config   - View/update configuration\n"
-        "• info     - Show this information\n\n"
+        "• setup       - Configure your API key and preferences\n"
+        "• review      - Review a file or directory\n"
+        "• teach-me    - Learn by correcting intentionally flawed code\n"
+        "• config      - View/update configuration\n"
+        "• export-logs - Export interaction logs for debugging\n"
+        "• info        - Show this information\n\n"
         "[bold]Learn more:[/bold]\n"
         "https://github.com/yourusername/code-tutor",
         border_style="cyan",
     ))
+
+
+@main.command("export-logs")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Output file path (default: code_tutor_logs_<timestamp>.json in current directory)",
+)
+@click.option(
+    "--config-dir",
+    type=click.Path(),
+    default=None,
+    help="Custom configuration directory path",
+)
+@click.option(
+    "--clear",
+    is_flag=True,
+    default=False,
+    help="Clear logs after exporting",
+)
+def export_logs(output: Optional[str], config_dir: Optional[str], clear: bool):
+    """Export student interaction logs to JSON for debugging.
+
+    This command packages all logged student interactions into a single JSON file
+    that can be sent to an instructor or developer for debugging purposes.
+
+    Logs are only created if logging is enabled in the configuration.
+    Use 'code-tutor setup' to enable logging.
+    """
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    try:
+        config_manager.load()
+
+        # Check if logging is enabled
+        if not config_manager.is_logging_enabled():
+            console.print(
+                "[yellow]Logging is not currently enabled.[/yellow]\n\n"
+                "To enable logging, you can manually edit your config file at:\n"
+                f"  {config_manager.config_path}\n\n"
+                "Add or update the following section:\n"
+                '  "logging": {\n'
+                '    "enabled": true,\n'
+                '    "log_interactions": true,\n'
+                '    "log_api_calls": false\n'
+                '  }\n'
+            )
+
+            if not Confirm.ask("\nContinue with export anyway?", default=False):
+                return
+
+        # Export logs
+        console.print("\n[cyan]Exporting logs...[/cyan]\n")
+
+        output_path = SessionLogger.export_all_logs(
+            config_dir=config_manager.config_dir if config_dir else None,
+            output_path=Path(output) if output else None
+        )
+
+        console.print(f"[green]✓ Logs exported successfully![/green]")
+        console.print(f"[cyan]Output file:[/cyan] {output_path}")
+
+        # Show summary
+        import json
+        with open(output_path, 'r') as f:
+            data = json.load(f)
+            total_sessions = data.get('total_sessions', 0)
+            console.print(f"[cyan]Total sessions:[/cyan] {total_sessions}")
+
+        # Clear logs if requested
+        if clear:
+            if Confirm.ask("\n[yellow]Are you sure you want to clear all log files?[/yellow]", default=False):
+                count = SessionLogger.clear_logs(config_manager.config_dir if config_dir else None)
+                console.print(f"[green]✓ Cleared {count} log file(s)[/green]")
+
+        console.print("\n[dim]You can now send this file to your instructor or developer for debugging.[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error exporting logs:[/red] {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

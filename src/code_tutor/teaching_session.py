@@ -9,6 +9,7 @@ from rich.prompt import Prompt, Confirm
 from rich.syntax import Syntax
 
 from .config import ConfigManager
+from .logger import SessionLogger
 
 
 class TeachingSession:
@@ -29,6 +30,14 @@ class TeachingSession:
         self.topic: str = ""
         self.round_number: int = 0
         self.max_rounds: int = 5
+
+        # Initialize logger if enabled
+        self.logger: Optional[SessionLogger] = None
+        if self.config.is_logging_enabled():
+            self.logger = SessionLogger(
+                config_dir=self.config.config_dir,
+                enabled=True
+            )
 
     def start_session(self) -> None:
         """Start an interactive teaching session."""
@@ -51,17 +60,37 @@ class TeachingSession:
             # Get programming language preference
             language = self._get_language()
 
+            # Start session logging
+            if self.logger:
+                self.logger.start_session("teaching", {
+                    "topic": self.topic,
+                    "language": language,
+                    "experience_level": experience_level,
+                    "model": self.model,
+                })
+
             # Start the teaching rounds
             self._run_teaching_rounds(experience_level, language)
 
             # Conclusion
             self._display_conclusion()
 
+            # End session logging
+            if self.logger:
+                self.logger.end_session()
+
         except ValueError as e:
+            if self.logger:
+                self.logger.log_error("ValueError", str(e))
             self.console.print(f"[red]Error:[/red] {e}")
         except KeyboardInterrupt:
+            if self.logger:
+                self.logger.end_session()
             self.console.print("\n\n[yellow]Teaching session interrupted. Goodbye![/yellow]")
         except Exception as e:
+            if self.logger:
+                import traceback
+                self.logger.log_error("UnexpectedException", str(e), traceback.format_exc())
             self.console.print(f"[red]Unexpected error:[/red] {e}")
 
     def _display_welcome(self) -> None:
@@ -92,6 +121,10 @@ class TeachingSession:
 
         topic = Prompt.ask("Topic")
 
+        # Log the topic selection
+        if self.logger and self.config.should_log_interactions():
+            self.logger.log_user_input("topic_selection", topic)
+
         self.console.print(f"\n[green]Great! Let's explore [bold]{topic}[/bold] together.[/green]\n")
 
         return topic
@@ -106,6 +139,10 @@ class TeachingSession:
         self.console.print("[dim]Examples: Python, JavaScript, Java, C++, Go, Rust[/dim]\n")
 
         language = Prompt.ask("Language", default="Python")
+
+        # Log the language selection
+        if self.logger and self.config.should_log_interactions():
+            self.logger.log_user_input("language_selection", language)
 
         return language
 
@@ -153,6 +190,17 @@ class TeachingSession:
 
             # Display evaluation
             self._display_evaluation(evaluation)
+
+            # Log the teaching round
+            if self.logger and self.config.should_log_interactions():
+                self.logger.log_teaching_round(
+                    self.round_number,
+                    self.topic,
+                    language,
+                    code_data["code"],
+                    explanation,
+                    evaluation.get("feedback", "")
+                )
 
             # Check if we should continue
             if evaluation.get("understanding_achieved", False):
