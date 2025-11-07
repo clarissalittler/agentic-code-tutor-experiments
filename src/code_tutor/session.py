@@ -9,6 +9,7 @@ from rich.prompt import Prompt, Confirm
 from .analyzer import CodeAnalyzer
 from .config import ConfigManager
 from .file_reader import FileReader
+from .logger import SessionLogger
 
 
 class ReviewSession:
@@ -26,6 +27,14 @@ class ReviewSession:
         self.file_reader = FileReader()
         self.analyzer: Optional[CodeAnalyzer] = None
 
+        # Initialize logger if enabled
+        self.logger: Optional[SessionLogger] = None
+        if self.config.is_logging_enabled():
+            self.logger = SessionLogger(
+                config_dir=self.config.config_dir,
+                enabled=True
+            )
+
     def start_review(self, file_path: str) -> None:
         """Start an interactive code review session.
 
@@ -39,6 +48,15 @@ class ReviewSession:
             model = self.config.get_model()
             experience_level = self.config.get("experience_level", "intermediate")
             preferences = self.config.get("preferences", {})
+
+            # Initialize logger and start session
+            if self.logger:
+                self.logger.start_session("review", {
+                    "file_path": file_path,
+                    "experience_level": experience_level,
+                    "preferences": preferences,
+                    "model": model,
+                })
 
             # Initialize analyzer
             self.analyzer = CodeAnalyzer(api_key, model)
@@ -63,9 +81,24 @@ class ReviewSession:
                 preferences,
             )
 
+            # Log the code analysis
+            if self.logger and self.config.should_log_interactions():
+                self.logger.log_code_analysis(
+                    file_path,
+                    file_data["content"],
+                    str(analysis)
+                )
+
             # Display initial observations
             if analysis.get("observations"):
                 self._display_observations(analysis["observations"])
+                # Log observations
+                if self.logger and self.config.should_log_interactions():
+                    self.logger.log_ai_response(
+                        "observations",
+                        "\n".join(analysis["observations"]),
+                        {"file_path": file_path}
+                    )
 
             # Ask questions
             questions = analysis.get("questions", [])
@@ -87,11 +120,22 @@ class ReviewSession:
                     "[yellow]No questions generated. This might indicate an issue.[/yellow]"
                 )
 
+            # End session logging
+            if self.logger:
+                self.logger.end_session()
+
         except FileNotFoundError as e:
+            if self.logger:
+                self.logger.log_error("FileNotFoundError", str(e))
             self.console.print(f"[red]Error:[/red] {e}")
         except ValueError as e:
+            if self.logger:
+                self.logger.log_error("ValueError", str(e))
             self.console.print(f"[red]Error:[/red] {e}")
         except Exception as e:
+            if self.logger:
+                import traceback
+                self.logger.log_error("UnexpectedException", str(e), traceback.format_exc())
             self.console.print(f"[red]Unexpected error:[/red] {e}")
 
     def _display_observations(self, observations: List[str]) -> None:
@@ -125,9 +169,26 @@ class ReviewSession:
 
         answers = []
         for i, question in enumerate(questions, 1):
+            # Log the question
+            if self.logger and self.config.should_log_interactions():
+                self.logger.log_ai_response(
+                    "question",
+                    question,
+                    {"question_number": i, "total_questions": len(questions)}
+                )
+
             self.console.print(f"[bold cyan]Question {i}:[/bold cyan] {question}\n")
             answer = Prompt.ask("[dim]Your answer[/dim]")
             answers.append(answer)
+
+            # Log the answer
+            if self.logger and self.config.should_log_interactions():
+                self.logger.log_user_input(
+                    "answer",
+                    answer,
+                    {"question": question, "question_number": i}
+                )
+
             self.console.print()
 
         return answers
@@ -138,6 +199,10 @@ class ReviewSession:
         Args:
             feedback: Feedback text (markdown formatted).
         """
+        # Log the feedback
+        if self.logger and self.config.should_log_interactions():
+            self.logger.log_ai_response("feedback", feedback)
+
         self.console.print(Panel.fit(
             "[bold green]Feedback & Suggestions[/bold green]",
             border_style="green",
@@ -170,8 +235,16 @@ class ReviewSession:
                 if not question.strip():
                     continue
 
+                # Log the follow-up question
+                if self.logger and self.config.should_log_interactions():
+                    self.logger.log_user_input("question", question, {"type": "follow_up"})
+
                 self.console.print("\n[cyan]Thinking...[/cyan]\n")
                 response = self.analyzer.continue_conversation(question)
+
+                # Log the AI response
+                if self.logger and self.config.should_log_interactions():
+                    self.logger.log_ai_response("answer", response, {"type": "follow_up"})
 
                 md = Markdown(response)
                 self.console.print(Panel(md, border_style="blue"))

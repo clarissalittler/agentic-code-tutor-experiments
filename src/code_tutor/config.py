@@ -36,6 +36,11 @@ class ConfigManager:
             "verbosity": "medium",
             "focus_areas": ["design", "readability"],
         },
+        "logging": {
+            "enabled": False,
+            "log_interactions": True,
+            "log_api_calls": False,
+        },
     }
 
     def __init__(self, config_dir: Optional[Path] = None):
@@ -194,3 +199,27 @@ class ConfigManager:
             Model name string.
         """
         return self.get("model", "claude-sonnet-4-5")
+
+    def is_logging_enabled(self) -> bool:
+        """Check if logging is enabled.
+
+        Returns:
+            True if logging is enabled, False otherwise.
+        """
+        return self.get("logging.enabled", False)
+
+    def should_log_interactions(self) -> bool:
+        """Check if interaction logging is enabled.
+
+        Returns:
+            True if interaction logging is enabled, False otherwise.
+        """
+        return self.get("logging.log_interactions", True)
+
+    def should_log_api_calls(self) -> bool:
+        """Check if API call logging is enabled.
+
+        Returns:
+            True if API call logging is enabled, False otherwise.
+        """
+        return self.get("logging.log_api_calls", False)
