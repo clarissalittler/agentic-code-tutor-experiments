@@ -52,7 +52,17 @@ def setup(config_dir: Optional[str]):
         existing_config = config_manager.load()
         has_existing = config_manager.is_configured()
 
-        if has_existing:
+        # Check if API key is locked
+        if config_manager.is_api_key_locked():
+            console.print(
+                "[yellow]Configuration is locked for multi-student deployment.[/yellow]\n"
+                "The API key cannot be changed. Other settings can be modified.\n"
+            )
+            if not Confirm.ask("Do you want to modify non-API settings?", default=False):
+                console.print("[green]Setup cancelled.[/green]")
+                return
+
+        if has_existing and not config_manager.is_api_key_locked():
             console.print("[yellow]Existing configuration found.[/yellow]")
             if not Confirm.ask("Do you want to reconfigure?", default=False):
                 console.print("[green]Setup cancelled. Using existing configuration.[/green]")
@@ -60,27 +70,38 @@ def setup(config_dir: Optional[str]):
     except Exception:
         existing_config = config_manager.DEFAULT_CONFIG.copy()
 
-    # Get API key
-    console.print("[bold]Step 1: Anthropic API Key[/bold]")
-    console.print(
-        "[dim]Get your API key from: https://console.anthropic.com/settings/keys[/dim]\n"
-    )
-
-    current_key = existing_config.get("api_key", "")
-    if current_key:
-        api_key = Prompt.ask(
-            "API Key",
-            default="[hidden - press Enter to keep current]",
-            password=True,
-        )
-        if api_key == "[hidden - press Enter to keep current]":
-            api_key = current_key
+    # Get API key (skip if locked)
+    if config_manager.is_api_key_locked():
+        api_key = existing_config.get("api_key", "")
+        if not api_key:
+            console.print(
+                "[red]Error: API key is locked but not configured.[/red]\n"
+                "Please contact your administrator to set up the API key."
+            )
+            return
+        console.print("[bold]Step 1: Anthropic API Key[/bold]")
+        console.print("[yellow]API key is locked and cannot be changed.[/yellow]\n")
     else:
-        api_key = Prompt.ask("API Key", password=True)
+        console.print("[bold]Step 1: Anthropic API Key[/bold]")
+        console.print(
+            "[dim]Get your API key from: https://console.anthropic.com/settings/keys[/dim]\n"
+        )
 
-    if not api_key or not api_key.strip():
-        console.print("[red]API key is required. Setup cancelled.[/red]")
-        return
+        current_key = existing_config.get("api_key", "")
+        if current_key:
+            api_key = Prompt.ask(
+                "API Key",
+                default="[hidden - press Enter to keep current]",
+                password=True,
+            )
+            if api_key == "[hidden - press Enter to keep current]":
+                api_key = current_key
+        else:
+            api_key = Prompt.ask("API Key", password=True)
+
+        if not api_key or not api_key.strip():
+            console.print("[red]API key is required. Setup cancelled.[/red]")
+            return
 
     # Get model preference
     console.print("\n[bold]Step 2: Claude Model[/bold]")
@@ -161,6 +182,7 @@ def setup(config_dir: Optional[str]):
     # Save configuration
     new_config = {
         "api_key": api_key.strip(),
+        "api_key_locked": existing_config.get("api_key_locked", False),  # Preserve lock status
         "model": model,
         "experience_level": experience_level,
         "preferences": {
@@ -290,11 +312,23 @@ def config(ctx, config_dir: Optional[str]):
         console.print(f"[cyan]Config file:[/cyan] {config_manager.config_path}")
 
         api_key = config_data.get("api_key", "")
+        api_key_locked = config_data.get("api_key_locked", False)
+
         if api_key:
-            masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
-            console.print(f"[cyan]API key:[/cyan] {masked}")
+            if api_key_locked:
+                # Don't reveal any characters when locked
+                console.print("[cyan]API key:[/cyan] ******* [yellow](locked)[/yellow]")
+            else:
+                # Show partial key when unlocked
+                masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
+                console.print(f"[cyan]API key:[/cyan] {masked}")
         else:
             console.print("[cyan]API key:[/cyan] [red]Not set[/red]")
+
+        if api_key_locked:
+            console.print(
+                "[yellow]Note: API key is locked for multi-student deployment.[/yellow]"
+            )
 
         console.print(
             f"[cyan]Model:[/cyan] {config_data.get('model', 'claude-sonnet-4-5')}"
@@ -317,7 +351,13 @@ def config(ctx, config_dir: Optional[str]):
         )
 
         console.print()
-        if Confirm.ask("Would you like to reconfigure?", default=False):
+
+        if api_key_locked:
+            reconfigure_prompt = "Would you like to reconfigure non-API settings?"
+        else:
+            reconfigure_prompt = "Would you like to reconfigure?"
+
+        if Confirm.ask(reconfigure_prompt, default=False):
             # Re-run setup using Click's context
             ctx.invoke(setup, config_dir=config_dir)
 
