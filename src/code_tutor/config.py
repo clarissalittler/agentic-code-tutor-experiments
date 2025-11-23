@@ -29,6 +29,7 @@ class ConfigManager:
 
     DEFAULT_CONFIG = {
         "api_key": "",
+        "api_key_locked": False,
         "model": "claude-sonnet-4-5",
         "experience_level": "intermediate",
         "preferences": {
@@ -223,3 +224,19 @@ class ConfigManager:
             True if API call logging is enabled, False otherwise.
         """
         return self.get("logging.log_api_calls", False)
+
+    def is_api_key_locked(self) -> bool:
+        """Check if the API key is locked from being changed.
+
+        Returns:
+            True if API key is locked, False otherwise.
+        """
+        return self.get("api_key_locked", False)
+
+    def can_modify_api_key(self) -> bool:
+        """Check if the API key can be modified.
+
+        Returns:
+            True if API key can be modified, False if it's locked.
+        """
+        return not self.is_api_key_locked()

@@ -134,14 +134,100 @@ Configuration is stored in `~/.config/code-tutor/config.json`:
 ```json
 {
   "api_key": "your-api-key",
+  "api_key_locked": false,
   "model": "claude-sonnet-4-5",
   "experience_level": "intermediate",
   "preferences": {
     "question_style": "socratic",
     "verbosity": "medium",
     "focus_areas": ["design", "readability"]
+  },
+  "logging": {
+    "enabled": false,
+    "log_interactions": true,
+    "log_api_calls": false
   }
 }
+```
+
+### Multi-Student Deployment (Locked API Key)
+
+For classroom or multi-student environments where you want to provide a shared API key that students cannot modify, you can lock the API key in the configuration. This is useful when:
+
+- Setting up Code Tutor on shared lab computers
+- Providing a managed installation for students
+- Controlling API usage through a single key
+
+**Setup Instructions:**
+
+1. **Create the configuration directory:**
+   ```bash
+   mkdir -p ~/.config/code-tutor
+   ```
+
+2. **Create a configuration file with locked API key:**
+   ```bash
+   cat > ~/.config/code-tutor/config.json <<'EOF'
+   {
+     "api_key": "your-shared-api-key",
+     "api_key_locked": true,
+     "model": "claude-sonnet-4-5",
+     "experience_level": "intermediate",
+     "preferences": {
+       "question_style": "socratic",
+       "verbosity": "medium",
+       "focus_areas": ["design", "readability"]
+     },
+     "logging": {
+       "enabled": false,
+       "log_interactions": true,
+       "log_api_calls": false
+     }
+   }
+   EOF
+   ```
+
+3. **Set appropriate permissions** (optional but recommended):
+   ```bash
+   chmod 644 ~/.config/code-tutor/config.json
+   ```
+
+**Behavior with Locked API Key:**
+
+- ✅ Students can still modify their experience level, question style, and other preferences
+- ✅ Students can view the configuration with `code-tutor config`
+- ✅ Students can use all features of Code Tutor normally
+- ❌ Students cannot change the API key through `code-tutor setup`
+- ℹ️  The configuration will clearly indicate that the API key is locked
+
+When students run `code-tutor config`, they will see:
+
+```
+API key: sk-ant-a... (locked)
+Note: API key is locked for multi-student deployment.
+```
+
+When students try to reconfigure, they will be prompted:
+
+```
+Configuration is locked for multi-student deployment.
+The API key cannot be changed. Other settings can be modified.
+
+Do you want to modify non-API settings? [y/n]
+```
+
+**Alternative Deployment Using Custom Config Directory:**
+
+You can also use a custom configuration directory for system-wide deployments:
+
+```bash
+# System-wide config location
+sudo mkdir -p /etc/code-tutor
+sudo nano /etc/code-tutor/config.json
+# ... add configuration with api_key_locked: true
+
+# Students then use:
+code-tutor review --config-dir /etc/code-tutor myfile.py
 ```
 
 ### Experience Levels
