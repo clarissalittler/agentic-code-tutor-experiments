@@ -203,9 +203,11 @@ For classroom or multi-student environments where you want to provide a shared A
 When students run `code-tutor config`, they will see:
 
 ```
-API key: sk-ant-a... (locked)
+API key: ******* (locked)
 Note: API key is locked for multi-student deployment.
 ```
+
+**Note:** The API key is completely hidden (no characters are revealed) when locked to prevent students from seeing any part of the key.
 
 When students try to reconfigure, they will be prompted:
 

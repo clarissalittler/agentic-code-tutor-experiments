@@ -315,9 +315,13 @@ def config(ctx, config_dir: Optional[str]):
         api_key_locked = config_data.get("api_key_locked", False)
 
         if api_key:
-            masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
-            locked_indicator = " [yellow](locked)[/yellow]" if api_key_locked else ""
-            console.print(f"[cyan]API key:[/cyan] {masked}{locked_indicator}")
+            if api_key_locked:
+                # Don't reveal any characters when locked
+                console.print("[cyan]API key:[/cyan] ******* [yellow](locked)[/yellow]")
+            else:
+                # Show partial key when unlocked
+                masked = api_key[:8] + "..." if len(api_key) > 8 else "***"
+                console.print(f"[cyan]API key:[/cyan] {masked}")
         else:
             console.print("[cyan]API key:[/cyan] [red]Not set[/red]")
 
