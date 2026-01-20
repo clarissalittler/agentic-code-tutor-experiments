@@ -1,0 +1,23 @@
+{
+  "keywords": [
+    "recursion",
+    "performance",
+    "time complexity",
+    "memoization",
+    "base case"
+  ],
+  "expected_sections": [
+    "Questions",
+    "Observations"
+  ],
+  "anti_patterns": [
+    "terrible",
+    "wrong",
+    "bad code",
+    "stupid",
+    "obviously"
+  ],
+  "min_questions": 2,
+  "max_questions": 4,
+  "notes": "Should ask about performance implications of recursive approach and whether memoization was considered. Should observe the exponential time complexity."
+}
