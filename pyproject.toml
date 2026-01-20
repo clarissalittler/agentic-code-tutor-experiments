@@ -12,11 +12,32 @@ license = {text = "MIT"}
 authors = [
     {name = "Code Tutor Contributors"}
 ]
+keywords = ["code-review", "tutoring", "education", "ai", "claude", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Education",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "click>=8.1.0",
     "anthropic>=0.18.0",
     "rich>=13.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/clarissalittler/agentic-code-tutor-experiments"
+Repository = "https://github.com/clarissalittler/agentic-code-tutor-experiments"
+Issues = "https://github.com/clarissalittler/agentic-code-tutor-experiments/issues"
 
 [project.optional-dependencies]
 dev = [
