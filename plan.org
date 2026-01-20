@@ -90,3 +90,123 @@ code-tutor teach-me
 # 5. Get feedback
 # 6. Continue with more examples or finish
 #+end_src
+
+** TODO Idea 3: Working Directory for Exercises
+
+A persistent workspace where the tutor can drop exercises for the user to work on later. This creates a more asynchronous learning experience - the tutor generates challenges, and the user can tackle them at their own pace using their preferred editor/tools.
+
+*** Core Concept
+- Create a dedicated directory (e.g., =~/.code-tutor/exercises/= or =~/code-tutor-exercises/=)
+- Tutor generates exercise files with clear instructions embedded as comments
+- User works on exercises independently, then returns for feedback
+- Track exercise status: pending, in-progress, submitted, reviewed
+
+*** Exercise File Structure
+Each exercise could be a directory containing:
+- =README.md= - Instructions, learning objectives, hints
+- =starter.{ext}= - The starting code/template to fill in
+- =test_{name}.{ext}= - Test cases (optional, for self-checking)
+- =.meta.json= - Metadata (topic, difficulty, created date, status)
+
+*** Proposed Commands
+#+begin_src bash
+# Generate a new exercise on a topic
+code-tutor exercise generate "binary search" --language python
+
+# List all exercises and their status
+code-tutor exercise list
+
+# Submit an exercise for review
+code-tutor exercise submit ~/code-tutor-exercises/binary-search-001/
+
+# Get a hint for an exercise
+code-tutor exercise hint ~/code-tutor-exercises/binary-search-001/
+
+# Clean up completed exercises
+code-tutor exercise archive
+#+end_src
+
+*** Exercise Types to Support
+- Fill-in-the-blank: Complete a partially written function
+- Bug fix: Find and fix the bug(s) in provided code
+- Implementation: Write a function from scratch given specs/tests
+- Refactoring: Improve given working but messy code
+- Test writing: Write tests for provided implementation
+
+*** Integration with Existing Modes
+- "Teach Me" could offer to save interesting examples as exercises
+- Code review could suggest related exercises for improvement areas
+- Exercises could feed back into the learning progress tracking
+
+*** Implementation Considerations
+- [ ] Exercise directory manager (create, list, archive)
+- [ ] Exercise generator using Claude API
+- [ ] Exercise templates for different types
+- [ ] Metadata tracking and status management
+- [ ] Submission and review workflow
+- [ ] Optional test runner integration for self-checking
+
+** TODO Idea 4: Proof Checking Mode
+
+A mode similar to code review but specifically designed for reviewing mathematical and logical proofs. Uses the same respectful, questioning approach but adapted for proof structure and rigor.
+
+*** Core Concept
+- Review proofs written in various formats (LaTeX, plain text, Lean, Coq, etc.)
+- Ask clarifying questions about proof strategy and intuition
+- Check logical validity, identify gaps or unjustified steps
+- Suggest improvements while respecting the prover's approach
+- Teach proof techniques through Socratic dialogue
+
+*** Key Differences from Code Review
+- Focus on logical validity rather than code correctness
+- Check for: gaps in reasoning, unjustified assumptions, circular logic
+- Different "experience levels": student, undergrad, graduate, researcher
+- Domain awareness: analysis, algebra, topology, logic, CS theory, etc.
+
+*** Proof Formats to Support
+- Plain text / Markdown proofs
+- LaTeX documents
+- Formal proof assistants (Lean, Coq, Agda, Isabelle)
+- Pseudocode algorithms with correctness arguments
+
+*** Proposed Commands
+#+begin_src bash
+# Review a proof file
+code-tutor proof review proof.tex
+
+# Review with specific domain context
+code-tutor proof review proof.md --domain "real analysis"
+
+# Interactive proof building session
+code-tutor proof assist
+
+# Check a formal proof (Lean, Coq)
+code-tutor proof check theorem.lean
+#+end_src
+
+*** Review Focus Areas
+- Logical structure and flow
+- Completeness (are all cases covered?)
+- Rigor (are steps justified?)
+- Clarity of exposition
+- Use of lemmas and prior results
+- Edge cases and boundary conditions
+
+*** Socratic Proof Teaching
+Similar to "Teach Me" but for proofs:
+- Show a flawed proof, ask user to identify the error
+- Present a theorem, ask user to sketch a proof approach
+- Give a partial proof, ask user to fill in the gaps
+
+*** Integration Ideas
+- Link to proof writing resources and common techniques
+- Suggest relevant theorems/lemmas that might help
+- For formal proofs: parse and understand the proof assistant syntax
+- Export reviewed proofs with annotations
+
+*** Implementation Considerations
+- [ ] Proof file reader (LaTeX, Markdown, plain text, formal languages)
+- [ ] Domain-specific prompt engineering for different math areas
+- [ ] Proof structure analyzer (identify claims, justifications, conclusions)
+- [ ] Integration with existing questioning and feedback systems
+- [ ] Formal proof assistant integration (parse Lean/Coq/etc.)
