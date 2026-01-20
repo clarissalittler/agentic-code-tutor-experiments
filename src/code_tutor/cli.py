@@ -20,24 +20,28 @@ console = Console()
 
 @click.group()
 @click.version_option(version="0.1.0")
-def main():
-    """Code Tutor - An intelligent, respectful code review and tutoring CLI tool.
-
-    Get personalized feedback on your code that respects your experience level
-    and programming style.
-    """
-    pass
-
-
-@main.command()
 @click.option(
     "--config-dir",
     type=click.Path(),
     default=None,
     help="Custom configuration directory path",
 )
-def setup(config_dir: Optional[str]):
+@click.pass_context
+def main(ctx, config_dir: Optional[str]):
+    """Code Tutor - An intelligent, respectful code review and tutoring CLI tool.
+
+    Get personalized feedback on your code that respects your experience level
+    and programming style.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["config_dir"] = config_dir
+
+
+@main.command()
+@click.pass_context
+def setup(ctx):
     """Initial setup: configure API key and preferences."""
+    config_dir = ctx.obj.get("config_dir")
     console.print(Panel.fit(
         "[bold cyan]Welcome to Code Tutor![/bold cyan]\n\n"
         "Let's set up your configuration.",
@@ -215,17 +219,13 @@ def setup(config_dir: Optional[str]):
     default=True,
     help="Recursively search directories (default: True)",
 )
-@click.option(
-    "--config-dir",
-    type=click.Path(),
-    default=None,
-    help="Custom configuration directory path",
-)
-def review(path: str, recursive: bool, config_dir: Optional[str]):
+@click.pass_context
+def review(ctx, path: str, recursive: bool):
     """Review a source code file or directory.
 
     PATH: Path to the file or directory to review
     """
+    config_dir = ctx.obj.get("config_dir")
     config_manager = ConfigManager(Path(config_dir) if config_dir else None)
 
     # Check if configured
@@ -255,19 +255,15 @@ def review(path: str, recursive: bool, config_dir: Optional[str]):
 
 
 @main.command("teach-me")
-@click.option(
-    "--config-dir",
-    type=click.Path(),
-    default=None,
-    help="Custom configuration directory path",
-)
-def teach_me(config_dir: Optional[str]):
+@click.pass_context
+def teach_me(ctx):
     """Interactive teaching mode - learn by correcting mistakes.
 
     In this mode, the AI presents intentionally flawed code and asks you
     to identify and explain what's wrong. This Socratic method helps you
     learn by teaching and correcting mistakes.
     """
+    config_dir = ctx.obj.get("config_dir")
     config_manager = ConfigManager(Path(config_dir) if config_dir else None)
 
     # Check if configured
@@ -289,15 +285,10 @@ def teach_me(config_dir: Optional[str]):
 
 
 @main.command()
-@click.option(
-    "--config-dir",
-    type=click.Path(),
-    default=None,
-    help="Custom configuration directory path",
-)
 @click.pass_context
-def config(ctx, config_dir: Optional[str]):
+def config(ctx):
     """View or update configuration."""
+    config_dir = ctx.obj.get("config_dir")
     config_manager = ConfigManager(Path(config_dir) if config_dir else None)
 
     try:
@@ -359,7 +350,7 @@ def config(ctx, config_dir: Optional[str]):
 
         if Confirm.ask(reconfigure_prompt, default=False):
             # Re-run setup using Click's context
-            ctx.invoke(setup, config_dir=config_dir)
+            ctx.invoke(setup)
 
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
@@ -367,13 +358,7 @@ def config(ctx, config_dir: Optional[str]):
 
 
 @main.command()
-@click.option(
-    "--config-dir",
-    type=click.Path(),
-    default=None,
-    help="Custom configuration directory path",
-)
-def info(config_dir: Optional[str]):
+def info():
     """Show information about Code Tutor."""
     console.print(Panel.fit(
         "[bold cyan]Code Tutor v0.1.0[/bold cyan]\n\n"
@@ -405,18 +390,13 @@ def info(config_dir: Optional[str]):
     help="Output file path (default: code_tutor_logs_<timestamp>.json in current directory)",
 )
 @click.option(
-    "--config-dir",
-    type=click.Path(),
-    default=None,
-    help="Custom configuration directory path",
-)
-@click.option(
     "--clear",
     is_flag=True,
     default=False,
     help="Clear logs after exporting",
 )
-def export_logs(output: Optional[str], config_dir: Optional[str], clear: bool):
+@click.pass_context
+def export_logs(ctx, output: Optional[str], clear: bool):
     """Export student interaction logs to JSON for debugging.
 
     This command packages all logged student interactions into a single JSON file
@@ -425,6 +405,7 @@ def export_logs(output: Optional[str], config_dir: Optional[str], clear: bool):
     Logs are only created if logging is enabled in the configuration.
     Use 'code-tutor setup' to enable logging.
     """
+    config_dir = ctx.obj.get("config_dir")
     config_manager = ConfigManager(Path(config_dir) if config_dir else None)
 
     try:
