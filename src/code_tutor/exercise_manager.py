@@ -62,13 +62,23 @@ class ExerciseManager:
         "r": ".r",
     }
 
-    def __init__(self, exercises_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        exercises_dir: Optional[Path] = None,
+        config_manager: Optional[ConfigManager] = None,
+    ):
         """Initialize the exercise manager.
 
         Args:
             exercises_dir: Optional custom exercises directory path.
+            config_manager: Optional config manager to get exercises_dir from config.
         """
-        self.exercises_dir = exercises_dir or self.DEFAULT_EXERCISES_DIR
+        if exercises_dir:
+            self.exercises_dir = exercises_dir
+        elif config_manager:
+            self.exercises_dir = config_manager.get_exercises_dir()
+        else:
+            self.exercises_dir = self.DEFAULT_EXERCISES_DIR
 
     def ensure_directory_exists(self) -> Path:
         """Ensure the exercises directory exists.

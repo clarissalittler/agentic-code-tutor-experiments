@@ -550,7 +550,7 @@ def exercise_generate(ctx, topic: str, language: str, exercise_type: str, diffic
         # Create the exercise in the working directory
         console.print("[dim]Creating exercise files...[/dim]")
 
-        manager = ExerciseManager()
+        manager = ExerciseManager(config_manager=config_manager)
         exercise_info = manager.create_exercise(
             topic=topic,
             language=language,
@@ -592,7 +592,11 @@ def exercise_generate(ctx, topic: str, language: str, exercise_type: str, diffic
 @click.pass_context
 def exercise_list(ctx, status: Optional[str]):
     """List all exercises in the working directory."""
-    manager = ExerciseManager()
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager.load()
+
+    manager = ExerciseManager(config_manager=config_manager)
     exercises = manager.list_exercises(status_filter=status)
 
     if not exercises:
@@ -653,7 +657,7 @@ def exercise_submit(ctx, exercise_path: str):
             )
             sys.exit(1)
 
-        manager = ExerciseManager()
+        manager = ExerciseManager(config_manager=config_manager)
         exercise = manager.get_exercise(exercise_path)
 
         if not exercise:
@@ -720,7 +724,11 @@ def exercise_hint(ctx, exercise_path: str):
 
     Hints are revealed progressively. Each call reveals the next hint.
     """
-    manager = ExerciseManager()
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager.load()
+
+    manager = ExerciseManager(config_manager=config_manager)
     exercise = manager.get_exercise(exercise_path)
 
     if not exercise:
@@ -774,7 +782,11 @@ def exercise_archive(ctx, exercise_path: str, force: bool):
 
     Archived exercises are moved to the 'archived' subdirectory.
     """
-    manager = ExerciseManager()
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager.load()
+
+    manager = ExerciseManager(config_manager=config_manager)
     exercise = manager.get_exercise(exercise_path)
 
     if not exercise:

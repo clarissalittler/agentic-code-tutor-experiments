@@ -7,10 +7,26 @@ from typing import Any, Dict, Optional
 
 
 class ConfigManager:
-    """Manages user configuration for Code Tutor."""
+    """Manages user configuration for Code Tutor.
+
+    Configuration is loaded with the following precedence (highest to lowest):
+    1. Environment variables (CODE_TUTOR_API_KEY or ANTHROPIC_API_KEY for API key)
+    2. User config (~/.config/code-tutor/config.json)
+    3. System config (/etc/code-tutor/config.json) - for shared server deployments
+    4. Default values
+
+    For classroom/shared server deployments:
+    - Set API key via environment variable or system config with api_key_locked: true
+    - Each student's preferences are stored in their own ~/.config/code-tutor/
+    - Exercise directories are per-user by default (~/code-tutor-exercises/)
+    """
 
     DEFAULT_CONFIG_DIR = Path.home() / ".config" / "code-tutor"
+    SYSTEM_CONFIG_DIR = Path("/etc/code-tutor")
     CONFIG_FILE = "config.json"
+
+    # Environment variables checked for API key (in order of precedence)
+    API_KEY_ENV_VARS = ["CODE_TUTOR_API_KEY", "ANTHROPIC_API_KEY"]
 
     EXPERIENCE_LEVELS = ["beginner", "intermediate", "advanced", "expert"]
     QUESTION_STYLES = ["socratic", "direct", "exploratory"]
@@ -32,6 +48,7 @@ class ConfigManager:
         "api_key_locked": False,
         "model": "claude-sonnet-4-5",
         "experience_level": "intermediate",
+        "exercises_dir": "",  # Empty means use default ~/code-tutor-exercises/
         "preferences": {
             "question_style": "socratic",
             "verbosity": "medium",
@@ -53,23 +70,91 @@ class ConfigManager:
         self.config_dir = config_dir or self.DEFAULT_CONFIG_DIR
         self.config_path = self.config_dir / self.CONFIG_FILE
         self._config: Dict[str, Any] = {}
+        self._env_api_key: Optional[str] = None  # Cached env var API key
 
     def load(self) -> Dict[str, Any]:
-        """Load configuration from file.
+        """Load configuration from file with precedence merging.
+
+        Configuration is merged in this order (later overrides earlier):
+        1. Default config
+        2. System config (/etc/code-tutor/config.json) if exists
+        3. User config (~/.config/code-tutor/config.json) if exists
+
+        Environment variables for API key are checked separately in get_api_key().
 
         Returns:
             Configuration dictionary.
         """
-        if not self.config_path.exists():
-            self._config = self.DEFAULT_CONFIG.copy()
-            return self._config
+        # Start with defaults
+        self._config = self._deep_copy_config(self.DEFAULT_CONFIG)
 
-        try:
-            with open(self.config_path, "r") as f:
-                self._config = json.load(f)
-            return self._config
-        except (json.JSONDecodeError, IOError) as e:
-            raise ValueError(f"Failed to load configuration: {e}")
+        # Load and merge system config if exists (for shared server deployments)
+        system_config_path = self.SYSTEM_CONFIG_DIR / self.CONFIG_FILE
+        if system_config_path.exists():
+            try:
+                with open(system_config_path, "r") as f:
+                    system_config = json.load(f)
+                self._merge_config(self._config, system_config)
+            except (json.JSONDecodeError, IOError):
+                pass  # Silently ignore system config errors
+
+        # Load and merge user config if exists
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, "r") as f:
+                    user_config = json.load(f)
+                self._merge_config(self._config, user_config)
+            except (json.JSONDecodeError, IOError) as e:
+                raise ValueError(f"Failed to load configuration: {e}")
+
+        # Cache environment API key
+        self._env_api_key = self._get_env_api_key()
+
+        return self._config
+
+    def _deep_copy_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a deep copy of a config dictionary.
+
+        Args:
+            config: Config to copy.
+
+        Returns:
+            Deep copy of the config.
+        """
+        result = {}
+        for key, value in config.items():
+            if isinstance(value, dict):
+                result[key] = self._deep_copy_config(value)
+            elif isinstance(value, list):
+                result[key] = value.copy()
+            else:
+                result[key] = value
+        return result
+
+    def _merge_config(self, base: Dict[str, Any], override: Dict[str, Any]) -> None:
+        """Merge override config into base config (modifies base in place).
+
+        Args:
+            base: Base config to merge into.
+            override: Config values to merge.
+        """
+        for key, value in override.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                self._merge_config(base[key], value)
+            else:
+                base[key] = value
+
+    def _get_env_api_key(self) -> Optional[str]:
+        """Get API key from environment variables.
+
+        Returns:
+            API key from environment or None.
+        """
+        for env_var in self.API_KEY_ENV_VARS:
+            api_key = os.environ.get(env_var, "").strip()
+            if api_key:
+                return api_key
+        return None
 
     def save(self, config: Optional[Dict[str, Any]] = None) -> None:
         """Save configuration to file.
@@ -130,13 +215,22 @@ class ConfigManager:
     def is_configured(self) -> bool:
         """Check if the tool is configured with an API key.
 
+        Checks (in order): environment variable, config file.
+
         Returns:
             True if API key is set, False otherwise.
         """
+        # Check environment variable first
+        if self._env_api_key:
+            return True
+        # Then check config
         return bool(self.get("api_key"))
 
     def get_api_key(self) -> str:
         """Get the configured API key.
+
+        Precedence: environment variable > config file.
+        Environment variables checked: CODE_TUTOR_API_KEY, ANTHROPIC_API_KEY
 
         Returns:
             API key string.
@@ -144,10 +238,30 @@ class ConfigManager:
         Raises:
             ValueError: If API key is not configured.
         """
+        # Environment variable takes precedence
+        if self._env_api_key:
+            return self._env_api_key
+
+        # Fall back to config file
         api_key = self.get("api_key", "")
         if not api_key:
-            raise ValueError("API key not configured. Run 'code-tutor setup' first.")
+            raise ValueError(
+                "API key not configured. Either:\n"
+                "  1. Run 'code-tutor setup' to configure\n"
+                "  2. Set CODE_TUTOR_API_KEY or ANTHROPIC_API_KEY environment variable"
+            )
         return api_key
+
+    def get_exercises_dir(self) -> Path:
+        """Get the exercises directory path.
+
+        Returns:
+            Path to exercises directory.
+        """
+        custom_dir = self.get("exercises_dir", "")
+        if custom_dir:
+            return Path(custom_dir).expanduser()
+        return Path.home() / "code-tutor-exercises"
 
     def validate_experience_level(self, level: str) -> bool:
         """Validate an experience level.
@@ -240,3 +354,19 @@ class ConfigManager:
             True if API key can be modified, False if it's locked.
         """
         return not self.is_api_key_locked()
+
+    def is_api_key_from_env(self) -> bool:
+        """Check if API key is being provided via environment variable.
+
+        Returns:
+            True if API key comes from environment, False otherwise.
+        """
+        return bool(self._env_api_key)
+
+    def has_system_config(self) -> bool:
+        """Check if a system-wide config exists.
+
+        Returns:
+            True if /etc/code-tutor/config.json exists, False otherwise.
+        """
+        return (self.SYSTEM_CONFIG_DIR / self.CONFIG_FILE).exists()
