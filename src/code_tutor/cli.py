@@ -13,6 +13,10 @@ from .config import ConfigManager
 from .session import ReviewSession
 from .teaching_session import TeachingSession
 from .logger import SessionLogger
+from .exercise_manager import ExerciseManager
+from .exercise_generator import ExerciseGenerator
+from .proof_reader import ProofReader
+from .proof_session import ProofSession, ProofTeachingSession
 
 
 console = Console()
@@ -367,14 +371,18 @@ def info():
         "• Personalized feedback based on your experience level\n"
         "• Interactive dialogue about your code decisions\n"
         "• Respectful of your programming style and intentions\n"
+        "• Practice exercises with working directory\n"
+        "• Mathematical proof review and teaching\n"
         "• Powered by Claude AI\n\n"
         "[bold]Commands:[/bold]\n"
-        "• setup       - Configure your API key and preferences\n"
-        "• review      - Review a file or directory\n"
-        "• teach-me    - Learn by correcting intentionally flawed code\n"
-        "• config      - View/update configuration\n"
-        "• export-logs - Export interaction logs for debugging\n"
-        "• info        - Show this information\n\n"
+        "• setup         - Configure your API key and preferences\n"
+        "• review        - Review a file or directory\n"
+        "• teach-me      - Learn by correcting intentionally flawed code\n"
+        "• exercise      - Generate and manage coding exercises\n"
+        "• proof         - Review mathematical proofs\n"
+        "• config        - View/update configuration\n"
+        "• export-logs   - Export interaction logs for debugging\n"
+        "• info          - Show this information\n\n"
         "[bold]Learn more:[/bold]\n"
         "https://github.com/yourusername/code-tutor",
         border_style="cyan",
@@ -457,6 +465,483 @@ def export_logs(ctx, output: Optional[str], clear: bool):
     except Exception as e:
         console.print(f"[red]Error exporting logs:[/red] {e}")
         sys.exit(1)
+
+
+@main.group()
+@click.pass_context
+def exercise(ctx):
+    """Manage coding exercises in your working directory.
+
+    Generate, list, and submit exercises for practice and review.
+    Exercises are stored in ~/code-tutor-exercises/ by default.
+    """
+    pass
+
+
+@exercise.command("generate")
+@click.argument("topic")
+@click.option(
+    "--language", "-l",
+    default="Python",
+    help="Programming language for the exercise",
+)
+@click.option(
+    "--type", "-t", "exercise_type",
+    type=click.Choice([
+        "fill_in_blank", "bug_fix", "implementation", "refactoring", "test_writing"
+    ]),
+    default="implementation",
+    help="Type of exercise to generate",
+)
+@click.option(
+    "--difficulty", "-d",
+    type=click.Choice(["beginner", "intermediate", "advanced", "expert"]),
+    default=None,
+    help="Difficulty level (defaults to your experience level)",
+)
+@click.pass_context
+def exercise_generate(ctx, topic: str, language: str, exercise_type: str, difficulty: Optional[str]):
+    """Generate a new exercise on a topic.
+
+    TOPIC: The concept or skill to practice (e.g., "binary search", "recursion")
+    """
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    try:
+        config_manager.load()
+        if not config_manager.is_configured():
+            console.print(
+                "[red]Error:[/red] Code Tutor is not configured.\n"
+                "Run 'code-tutor setup' first."
+            )
+            sys.exit(1)
+
+        api_key = config_manager.get_api_key()
+        model = config_manager.get_model()
+        experience_level = config_manager.get("experience_level", "intermediate")
+
+        # Use experience level as default difficulty
+        if difficulty is None:
+            difficulty = experience_level
+
+        console.print(Panel.fit(
+            f"[bold cyan]Generating Exercise[/bold cyan]\n\n"
+            f"Topic: {topic}\n"
+            f"Language: {language}\n"
+            f"Type: {exercise_type}\n"
+            f"Difficulty: {difficulty}",
+            border_style="cyan",
+        ))
+        console.print()
+
+        # Generate the exercise
+        console.print("[dim]Generating exercise content...[/dim]")
+
+        generator = ExerciseGenerator(api_key, model)
+        exercise_content = generator.generate_exercise(
+            topic=topic,
+            language=language,
+            exercise_type=exercise_type,
+            difficulty=difficulty,
+            experience_level=experience_level,
+        )
+
+        # Create the exercise in the working directory
+        console.print("[dim]Creating exercise files...[/dim]")
+
+        manager = ExerciseManager()
+        exercise_info = manager.create_exercise(
+            topic=topic,
+            language=language,
+            exercise_type=exercise_type,
+            difficulty=difficulty,
+            instructions=exercise_content.get("instructions", ""),
+            starter_code=exercise_content.get("starter_code", ""),
+            solution_hints=exercise_content.get("hints", []),
+            learning_objectives=exercise_content.get("learning_objectives", []),
+            test_code=exercise_content.get("test_code", None),
+        )
+
+        console.print()
+        console.print(f"[green]Exercise created successfully![/green]")
+        console.print()
+        console.print(f"[cyan]Location:[/cyan] {exercise_info['path']}")
+        console.print()
+        console.print("[bold]Next steps:[/bold]")
+        console.print(f"  1. Open the exercise: [cyan]cd {exercise_info['path']}[/cyan]")
+        console.print(f"  2. Read the README.md for instructions")
+        console.print(f"  3. Edit the starter file to complete the exercise")
+        console.print(f"  4. Submit for review: [cyan]code-tutor exercise submit {exercise_info['id']}[/cyan]")
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error:[/red] {e}")
+        sys.exit(1)
+
+
+@exercise.command("list")
+@click.option(
+    "--status", "-s",
+    type=click.Choice(["pending", "in_progress", "submitted", "reviewed", "archived"]),
+    default=None,
+    help="Filter by status",
+)
+@click.pass_context
+def exercise_list(ctx, status: Optional[str]):
+    """List all exercises in the working directory."""
+    manager = ExerciseManager()
+    exercises = manager.list_exercises(status_filter=status)
+
+    if not exercises:
+        console.print("[yellow]No exercises found.[/yellow]")
+        if status:
+            console.print(f"[dim]Filtered by status: {status}[/dim]")
+        console.print()
+        console.print("Generate a new exercise with:")
+        console.print("  [cyan]code-tutor exercise generate \"topic\"[/cyan]")
+        return
+
+    console.print(Panel.fit(
+        f"[bold cyan]Your Exercises[/bold cyan]\n"
+        f"[dim]Directory: {manager.exercises_dir}[/dim]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    status_colors = {
+        "pending": "yellow",
+        "in_progress": "blue",
+        "submitted": "magenta",
+        "reviewed": "green",
+        "archived": "dim",
+    }
+
+    for ex in exercises:
+        metadata = ex["metadata"]
+        status_str = metadata.get("status", "unknown")
+        color = status_colors.get(status_str, "white")
+
+        console.print(f"[bold]{ex['id']}[/bold]")
+        console.print(f"  Topic: {metadata.get('topic', 'Unknown')}")
+        console.print(f"  Language: {metadata.get('language', 'Unknown')}")
+        console.print(f"  Type: {metadata.get('exercise_type', 'Unknown')}")
+        console.print(f"  Status: [{color}]{status_str}[/{color}]")
+        console.print(f"  Created: {metadata.get('created_at', 'Unknown')[:10]}")
+        console.print()
+
+
+@exercise.command("submit")
+@click.argument("exercise_path")
+@click.pass_context
+def exercise_submit(ctx, exercise_path: str):
+    """Submit an exercise for review.
+
+    EXERCISE_PATH: Path to the exercise directory or exercise ID
+    """
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    try:
+        config_manager.load()
+        if not config_manager.is_configured():
+            console.print(
+                "[red]Error:[/red] Code Tutor is not configured.\n"
+                "Run 'code-tutor setup' first."
+            )
+            sys.exit(1)
+
+        manager = ExerciseManager()
+        exercise = manager.get_exercise(exercise_path)
+
+        if not exercise:
+            console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
+            sys.exit(1)
+
+        # Read the submitted code
+        starter_file = exercise.get("starter_file")
+        if not starter_file:
+            console.print("[red]Error:[/red] Could not find starter file in exercise.")
+            sys.exit(1)
+
+        with open(starter_file, "r") as f:
+            submitted_code = f.read()
+
+        console.print(Panel.fit(
+            f"[bold cyan]Reviewing Submission[/bold cyan]\n\n"
+            f"Exercise: {exercise['metadata'].get('topic', 'Unknown')}\n"
+            f"Type: {exercise['metadata'].get('exercise_type', 'Unknown')}",
+            border_style="cyan",
+        ))
+        console.print()
+        console.print("[dim]Analyzing your solution...[/dim]")
+        console.print()
+
+        # Review the submission
+        api_key = config_manager.get_api_key()
+        model = config_manager.get_model()
+        experience_level = config_manager.get("experience_level", "intermediate")
+
+        generator = ExerciseGenerator(api_key, model)
+        review = generator.review_submission(
+            original_exercise=exercise["metadata"],
+            submitted_code=submitted_code,
+            language=exercise["metadata"].get("language", "Python"),
+            experience_level=experience_level,
+        )
+
+        # Display the review
+        from rich.markdown import Markdown
+        md = Markdown(review.get("feedback", "No feedback available."))
+        console.print(Panel(md, border_style="green", title="Review Feedback"))
+
+        # Update status
+        manager.update_status(exercise_path, ExerciseManager.STATUS_REVIEWED)
+        console.print()
+        console.print(f"[green]Exercise marked as reviewed.[/green]")
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error:[/red] {e}")
+        sys.exit(1)
+
+
+@exercise.command("hint")
+@click.argument("exercise_path")
+@click.pass_context
+def exercise_hint(ctx, exercise_path: str):
+    """Get a hint for an exercise.
+
+    EXERCISE_PATH: Path to the exercise directory or exercise ID
+
+    Hints are revealed progressively. Each call reveals the next hint.
+    """
+    manager = ExerciseManager()
+    exercise = manager.get_exercise(exercise_path)
+
+    if not exercise:
+        console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
+        sys.exit(1)
+
+    metadata = exercise["metadata"]
+    hints = metadata.get("solution_hints", [])
+    revealed = metadata.get("hints_revealed", 0)
+
+    console.print(Panel.fit(
+        f"[bold cyan]Hint for: {metadata.get('topic', 'Unknown')}[/bold cyan]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    hint = manager.get_next_hint(exercise_path)
+
+    if hint:
+        console.print(f"[yellow]Hint {revealed + 1}/{len(hints)}:[/yellow]")
+        console.print()
+        console.print(f"  {hint}")
+        console.print()
+
+        remaining = len(hints) - (revealed + 1)
+        if remaining > 0:
+            console.print(f"[dim]{remaining} more hint(s) available.[/dim]")
+        else:
+            console.print("[dim]No more hints available.[/dim]")
+    else:
+        console.print("[yellow]No more hints available for this exercise.[/yellow]")
+        console.print()
+        console.print("If you're still stuck, try:")
+        console.print("  - Re-reading the README.md instructions")
+        console.print("  - Breaking the problem into smaller parts")
+        console.print("  - Searching for similar examples online")
+
+    # Update status to in_progress if it was pending
+    if metadata.get("status") == ExerciseManager.STATUS_PENDING:
+        manager.update_status(exercise_path, ExerciseManager.STATUS_IN_PROGRESS)
+
+
+@exercise.command("archive")
+@click.argument("exercise_path")
+@click.option("--force", "-f", is_flag=True, help="Archive without confirmation")
+@click.pass_context
+def exercise_archive(ctx, exercise_path: str, force: bool):
+    """Archive a completed exercise.
+
+    EXERCISE_PATH: Path to the exercise directory or exercise ID
+
+    Archived exercises are moved to the 'archived' subdirectory.
+    """
+    manager = ExerciseManager()
+    exercise = manager.get_exercise(exercise_path)
+
+    if not exercise:
+        console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
+        sys.exit(1)
+
+    if not force:
+        if not Confirm.ask(f"Archive exercise '{exercise['id']}'?", default=False):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+    if manager.archive_exercise(exercise_path):
+        console.print(f"[green]Exercise archived successfully.[/green]")
+    else:
+        console.print(f"[red]Failed to archive exercise.[/red]")
+        sys.exit(1)
+
+
+@main.group()
+@click.pass_context
+def proof(ctx):
+    """Review and learn about mathematical proofs.
+
+    Get feedback on proofs written in various formats including plain text,
+    LaTeX, Markdown, and formal proof assistants like Lean and Coq.
+    """
+    pass
+
+
+@proof.command("review")
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option(
+    "--domain", "-d",
+    default=None,
+    help="Mathematical domain (e.g., 'real analysis', 'abstract algebra')",
+)
+@click.option(
+    "--level", "-l",
+    type=click.Choice(["student", "undergrad", "graduate", "researcher"]),
+    default=None,
+    help="Mathematical experience level (defaults from config)",
+)
+@click.pass_context
+def proof_review(ctx, file_path: str, domain: Optional[str], level: Optional[str]):
+    """Review a mathematical proof file.
+
+    FILE_PATH: Path to the proof file to review
+
+    Supported formats: .txt, .md, .tex, .lean, .v (Coq), .agda, .thy (Isabelle)
+    """
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    try:
+        config_manager.load()
+        if not config_manager.is_configured():
+            console.print(
+                "[red]Error:[/red] Code Tutor is not configured.\n"
+                "Run 'code-tutor setup' first."
+            )
+            sys.exit(1)
+
+        # Check if file type is supported
+        reader = ProofReader()
+        if not reader.is_supported(file_path):
+            console.print(f"[red]Error:[/red] Unsupported file type.")
+            console.print(f"Supported formats: {', '.join(reader.SUPPORTED_EXTENSIONS.keys())}")
+            sys.exit(1)
+
+        # Start proof review session
+        session = ProofSession(config_manager, console)
+        session.start_review(file_path, domain=domain, experience_level=level)
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error:[/red] {e}")
+        sys.exit(1)
+
+
+@proof.command("teach")
+@click.option(
+    "--domain", "-d",
+    default=None,
+    help="Mathematical domain to focus on (e.g., 'real analysis')",
+)
+@click.pass_context
+def proof_teach(ctx, domain: Optional[str]):
+    """Interactive proof teaching mode - learn by finding errors.
+
+    In this mode, the AI presents proofs with subtle errors or gaps.
+    Your task is to identify what's wrong and explain the issue.
+
+    This helps develop:
+      - Critical reading of mathematical arguments
+      - Understanding of common proof pitfalls
+      - Ability to spot logical gaps
+    """
+    config_dir = ctx.obj.get("config_dir")
+    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+
+    try:
+        config_manager.load()
+        if not config_manager.is_configured():
+            console.print(
+                "[red]Error:[/red] Code Tutor is not configured.\n"
+                "Run 'code-tutor setup' first."
+            )
+            sys.exit(1)
+
+        # Start proof teaching session
+        session = ProofTeachingSession(config_manager, console)
+        session.start_session(domain=domain)
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error:[/red] {e}")
+        sys.exit(1)
+
+
+@proof.command("info")
+def proof_info():
+    """Show information about proof review capabilities."""
+    reader = ProofReader()
+
+    console.print(Panel.fit(
+        "[bold cyan]Proof Review Mode[/bold cyan]\n\n"
+        "Review mathematical proofs with the same respectful,\n"
+        "questioning approach as code review.\n\n"
+        "[bold]Supported Formats:[/bold]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    for ext, name in sorted(reader.SUPPORTED_EXTENSIONS.items()):
+        console.print(f"  {ext:10} - {name}")
+
+    console.print()
+    console.print("[bold]Mathematical Domains:[/bold]")
+    console.print()
+
+    # Display domains in columns
+    domains = reader.MATH_DOMAINS
+    for i in range(0, len(domains), 3):
+        row = domains[i:i+3]
+        console.print("  " + "  |  ".join(f"{d:20}" for d in row))
+
+    console.print()
+    console.print("[bold]Experience Levels:[/bold]")
+    console.print()
+    levels = {
+        "student": "Taking first proof-based course",
+        "undergrad": "Undergraduate math major",
+        "graduate": "Graduate student",
+        "researcher": "Professional mathematician",
+    }
+    for level, desc in levels.items():
+        console.print(f"  {level:12} - {desc}")
+
+    console.print()
+    console.print("[bold]Commands:[/bold]")
+    console.print("  proof review <file>  - Review a proof file")
+    console.print("  proof teach          - Practice finding errors in proofs")
+    console.print()
 
 
 if __name__ == "__main__":
