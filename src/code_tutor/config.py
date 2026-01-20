@@ -39,6 +39,7 @@ class ConfigManager:
         "documentation",
     ]
     AVAILABLE_MODELS = [
+        "claude-opus-4-5",
         "claude-sonnet-4-5",
         "claude-haiku-4-5",
     ]

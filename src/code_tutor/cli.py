@@ -115,13 +115,14 @@ def setup(ctx):
     console.print("\n[bold]Step 2: Claude Model[/bold]")
     console.print("[dim]Choose which Claude model to use for code review.[/dim]\n")
 
-    console.print("  1. claude-sonnet-4-5 - Balanced performance and capability")
-    console.print("  2. claude-haiku-4-5 - Fastest and most cost-effective\n")
+    console.print("  1. claude-opus-4-5   - Most capable, best for complex analysis")
+    console.print("  2. claude-sonnet-4-5 - Balanced performance and capability (Recommended)")
+    console.print("  3. claude-haiku-4-5  - Fastest and most cost-effective\n")
 
     model_choice = Prompt.ask(
         "Choose your model",
-        choices=["1", "2"],
-        default="1",
+        choices=["1", "2", "3"],
+        default="2",
     )
     model = ConfigManager.AVAILABLE_MODELS[int(model_choice) - 1]
 
