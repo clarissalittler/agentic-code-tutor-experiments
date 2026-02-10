@@ -8,14 +8,13 @@ from rich.prompt import Prompt, Confirm
 from rich.syntax import Syntax
 
 from .config import ConfigManager
+from .contracts import (
+    TEACHING_CODE_EXAMPLE_CONTRACT,
+    TEACHING_EVALUATION_CONTRACT,
+)
 from .logger import SessionLogger
 from .llm_provider import LLMClient, create_llm_client
-from .response_parsing import (
-    extract_json_object,
-    parse_bool_value,
-    parse_string_value,
-    parse_understanding_achieved,
-)
+from .response_parsing import parse_understanding_achieved
 from .session_runtime import build_session_runtime
 
 
@@ -293,23 +292,7 @@ The mistake should be:
 3. Realistic - something a real programmer might do
 4. Focused - demonstrates ONE specific misconception
 
-Format your response as:
-## Code
-```{language.lower()}
-[your flawed code here]
-```
-
-## Student Question
-[Write a short, authentic message from the student perspective. Include:
-- What they were trying to accomplish
-- What happened when they ran it (error message, unexpected output, or weird behavior)
-- A specific question asking for help
-Example: "I tried running this code to X, but I got this error: [error message]. Can you help me understand what's going wrong?"]
-
-## Hidden Issues
-[Bullet list of what's wrong - this is for your internal tracking]
-- Issue 1
-- Issue 2
+{TEACHING_CODE_EXAMPLE_CONTRACT.format_instructions()}
 
 Remember: Make the student question authentic and include helpful hints like error messages or unexpected behavior!"""
 
@@ -322,6 +305,10 @@ Remember: Make the student question authentic and include helpful hints like err
         Returns:
             Dictionary with code, student_question, and issues.
         """
+        parsed = TEACHING_CODE_EXAMPLE_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
+
         lines = response.split("\n")
         code_lines = []
         student_question_lines = []
@@ -441,12 +428,7 @@ Evaluate the teacher's hints:
 3. Did they ask good guiding questions that promote discovery?
 4. How well did they balance between being helpful and letting you learn?
 
-Respond as ONLY valid JSON (no markdown wrapper) with this schema:
-{{
-  "student_response_markdown": "Student response in character",
-  "teaching_quality_assessment": "Brief internal note on teaching quality",
-  "understanding_achieved": true
-}}
+{TEACHING_EVALUATION_CONTRACT.format_instructions()}
 
 Set `understanding_achieved` to true only if the student reached understanding through good hints; otherwise false."""
 
@@ -484,25 +466,9 @@ Set `understanding_achieved` to true only if the student reached understanding t
         Returns:
             Dictionary with evaluation data.
         """
-        parsed_json = extract_json_object(response)
-        if parsed_json is not None:
-            understanding_achieved = parse_bool_value(parsed_json, "understanding_achieved")
-            student_response = parse_string_value(parsed_json, "student_response_markdown", "")
-            quality = parse_string_value(parsed_json, "teaching_quality_assessment", "")
-
-            if understanding_achieved is not None and (student_response or quality):
-                feedback_sections = []
-                if student_response:
-                    feedback_sections.append(student_response)
-                if quality:
-                    feedback_sections.append(
-                        f"## Teaching Quality Assessment\n{quality}"
-                    )
-
-                return {
-                    "understanding_achieved": understanding_achieved,
-                    "feedback": "\n\n".join(feedback_sections),
-                }
+        parsed = TEACHING_EVALUATION_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
 
         understanding_achieved = bool(parse_understanding_achieved(response))
 

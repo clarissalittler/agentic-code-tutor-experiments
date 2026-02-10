@@ -2,14 +2,10 @@
 
 from typing import Any, Dict, List, Optional
 
+from .contracts import PROOF_INITIAL_ANALYSIS_CONTRACT
 from .logger import SessionLogger
 from .llm_provider import LLMClient, create_llm_client
 from .models import ProofFeedbackResult, ProofInitialAnalysisResult
-from .response_parsing import (
-    extract_json_object,
-    parse_string_list,
-    parse_string_value,
-)
 
 
 class ProofAnalyzer:
@@ -255,16 +251,8 @@ Your task:
    - Proof techniques being employed
    - Areas that might benefit from discussion
 
-Return ONLY valid JSON (no markdown, no prose) with this schema:
-{{
-  "main_claim": "One sentence describing what is being proved",
-  "questions": ["question 1", "question 2", "question 3"],
-  "observations": ["observation 1", "observation 2", "observation 3"]
-}}
+{PROOF_INITIAL_ANALYSIS_CONTRACT.format_instructions()}
 
-Remember:
-- Ask 2-4 questions.
-- Keep observations brief and neutral.
 - Be respectful, assume the writer has good mathematical intuition, and focus on understanding their approach before judging its correctness or rigor."""
 
     def _build_feedback_prompt(
@@ -332,18 +320,9 @@ Remember: A {experience_level} might need {'more explanation of fundamentals' if
         Returns:
             Parsed proof analysis result.
         """
-        parsed_json = extract_json_object(response)
-        if parsed_json is not None:
-            main_claim = parse_string_value(parsed_json, "main_claim", "")
-            questions = parse_string_list(parsed_json, "questions")
-            observations = parse_string_list(parsed_json, "observations")
-            if main_claim or questions or observations:
-                return ProofInitialAnalysisResult(
-                    main_claim=main_claim,
-                    questions=questions,
-                    observations=observations,
-                    raw_response=response,
-                )
+        parsed = PROOF_INITIAL_ANALYSIS_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
 
         return self._parse_markdown_initial_response(response)
 

@@ -8,14 +8,15 @@ from rich.prompt import Prompt, Confirm
 from rich.syntax import Syntax
 
 from .config import ConfigManager
+from .contracts import (
+    PROOF_TEACHING_EVALUATION_CONTRACT,
+    PROOF_TEACHING_EXAMPLE_CONTRACT,
+)
 from .proof_reader import ProofReader
 from .proof_analyzer import ProofAnalyzer
 from .logger import SessionLogger
 from .llm_provider import LLMClient, create_llm_client
 from .response_parsing import (
-    extract_json_object,
-    parse_bool_value,
-    parse_string_value,
     parse_understanding_achieved,
 )
 from .session_runtime import (
@@ -557,18 +558,7 @@ The error should be:
 
 For a {experience_level} level mathematician, adjust the sophistication accordingly.
 
-        Format your response as:
-
-## Theorem
-[State the theorem or claim being "proved"]
-
-## Flawed Proof
-[The proof with the intentional error(s)]
-
-## Hidden Issues
-[List what's actually wrong - for internal tracking only]
-- Issue 1: [description]
-- Issue 2: [if applicable]"""
+{PROOF_TEACHING_EXAMPLE_CONTRACT.format_instructions()}"""
 
         try:
             completion = self.client.complete_with_metadata(
@@ -603,6 +593,10 @@ For a {experience_level} level mathematician, adjust the sophistication accordin
         Returns:
             Dictionary with theorem, proof, and issues.
         """
+        parsed = PROOF_TEACHING_EXAMPLE_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
+
         lines = response.split("\n")
         theorem_lines = []
         proof_lines = []
@@ -718,11 +712,7 @@ As a {experience_level} level student, evaluate:
 2. Is their explanation mathematically sound?
 3. Did they explain WHY it's an error?
 
-Respond as ONLY valid JSON (no markdown wrapper) with this schema:
-{{
-  "feedback_markdown": "Constructive feedback on their analysis",
-  "understanding_achieved": true
-}}
+{PROOF_TEACHING_EVALUATION_CONTRACT.format_instructions()}
 
 Set `understanding_achieved` to true if they identified key issues; otherwise false."""
 
@@ -744,15 +734,9 @@ Set `understanding_achieved` to true if they identified key issues; otherwise fa
                     usage=completion.usage,
                 )
 
-            parsed_json = extract_json_object(content)
-            if parsed_json is not None:
-                parsed_understanding = parse_bool_value(parsed_json, "understanding_achieved")
-                parsed_feedback = parse_string_value(parsed_json, "feedback_markdown", "")
-                if parsed_understanding is not None and parsed_feedback:
-                    return {
-                        "understanding_achieved": parsed_understanding,
-                        "feedback": parsed_feedback,
-                    }
+            parsed = PROOF_TEACHING_EVALUATION_CONTRACT.parse_response(content)
+            if parsed is not None:
+                return parsed
 
             understanding = parse_understanding_achieved(content)
 

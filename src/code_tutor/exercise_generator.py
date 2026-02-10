@@ -2,14 +2,13 @@
 
 from typing import Any, Dict, List, Optional
 
+from .contracts import (
+    EXERCISE_GENERATION_CONTRACT,
+    EXERCISE_REVIEW_CONTRACT,
+)
 from .logger import SessionLogger
 from .llm_provider import LLMClient, create_llm_client
 from .models import ExerciseGenerationResult, ExerciseReviewResult
-from .response_parsing import (
-    extract_json_object,
-    parse_string_list,
-    parse_string_value,
-)
 
 from .exercise_manager import ExerciseManager
 
@@ -157,15 +156,7 @@ Difficulty Guidance: {difficulty_guidance.get(difficulty, difficulty_guidance['i
 Exercise Type Instructions:
 {type_instructions.get(exercise_type, type_instructions[ExerciseManager.TYPE_IMPLEMENTATION])}
 
-Return ONLY valid JSON (no markdown, no prose) with this schema:
-{{
-  "instructions": "Detailed learner instructions (2-4 paragraphs)",
-  "learning_objectives": ["objective 1", "objective 2", "objective 3"],
-  "starter_code": "Code template/buggy code/signature",
-  "test_code": "Optional runnable tests, or empty string",
-  "hints": ["hint 1", "hint 2", "hint 3"],
-  "solution_explanation": "Brief hidden solution explanation"
-}}
+{EXERCISE_GENERATION_CONTRACT.format_instructions()}
 
 Remember:
 - Make the exercise practical and relevant
@@ -192,27 +183,9 @@ Remember:
         Returns:
             Parsed exercise generation result.
         """
-        parsed_json = extract_json_object(response)
-        if parsed_json is not None:
-            instructions = parse_string_value(parsed_json, "instructions", "")
-            learning_objectives = parse_string_list(parsed_json, "learning_objectives")
-            starter_code = parse_string_value(parsed_json, "starter_code", "")
-            test_code = parse_string_value(parsed_json, "test_code", "")
-            hints = parse_string_list(parsed_json, "hints")
-            solution_explanation = parse_string_value(
-                parsed_json,
-                "solution_explanation",
-                "",
-            )
-            if instructions or starter_code or learning_objectives or hints:
-                return ExerciseGenerationResult(
-                    instructions=instructions,
-                    learning_objectives=learning_objectives,
-                    starter_code=starter_code,
-                    test_code=test_code,
-                    hints=hints,
-                    solution_explanation=solution_explanation,
-                )
+        parsed = EXERCISE_GENERATION_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
 
         return self._parse_markdown_exercise_response(response)
 
@@ -367,11 +340,8 @@ Submitted Code:
 {submitted_code}
 ```
 
-Provide a constructive review as ONLY valid JSON (no markdown wrapper) with this schema:
-{{
-  "feedback_markdown": "Markdown feedback with sections: Correctness, Code Quality, Understanding Demonstrated, Suggestions, Overall Assessment",
-  "assessment": "NEEDS_WORK | ACCEPTABLE | GOOD | EXCELLENT"
-}}
+Provide a constructive review with:
+{EXERCISE_REVIEW_CONTRACT.format_instructions()}
 
 Be encouraging but honest. Focus on learning and improvement."""
 
@@ -384,23 +354,13 @@ Be encouraging but honest. Focus on learning and improvement."""
             content = completion.text
             self._log_api_call(prompt, content, completion.usage)
 
-            parsed_json = extract_json_object(content)
-            if parsed_json is not None:
-                feedback = parse_string_value(parsed_json, "feedback_markdown", "")
-                if not feedback:
-                    feedback = parse_string_value(parsed_json, "feedback", "")
-                assessment = self._normalize_assessment(
-                    parse_string_value(parsed_json, "assessment", "ACCEPTABLE")
-                )
-                if feedback:
-                    return ExerciseReviewResult(
-                        feedback=feedback,
-                        assessment=assessment,
-                    )
+            parsed = EXERCISE_REVIEW_CONTRACT.parse_response(content)
+            if parsed is not None:
+                return parsed
 
             # Fallback: if the model ignored JSON instructions.
             feedback = content
-            assessment = self._normalize_assessment(content)
+            assessment = EXERCISE_REVIEW_CONTRACT.normalize_assessment(content)
 
             return ExerciseReviewResult(
                 feedback=feedback,
@@ -409,16 +369,3 @@ Be encouraging but honest. Focus on learning and improvement."""
 
         except Exception as e:
             raise ValueError(f"Failed to review submission: {e}")
-
-    @staticmethod
-    def _normalize_assessment(raw_value: str) -> str:
-        """Normalize review assessment to a supported label."""
-        normalized = (raw_value or "").strip().upper()
-        allowed = {"NEEDS_WORK", "ACCEPTABLE", "GOOD", "EXCELLENT"}
-        if normalized in allowed:
-            return normalized
-
-        for level in ["EXCELLENT", "GOOD", "ACCEPTABLE", "NEEDS_WORK"]:
-            if level in normalized:
-                return level
-        return "ACCEPTABLE"

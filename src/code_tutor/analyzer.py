@@ -2,13 +2,10 @@
 
 from typing import Any, Dict, List, Optional
 
+from .contracts import CODE_INITIAL_ANALYSIS_CONTRACT
 from .logger import SessionLogger
 from .llm_provider import LLMClient, create_llm_client
 from .models import CodeFeedbackResult, CodeInitialAnalysisResult
-from .response_parsing import (
-    extract_json_object,
-    parse_string_list,
-)
 
 
 class CodeAnalyzer:
@@ -233,15 +230,8 @@ Your task:
    - Notable patterns or approaches used
    - Areas that might benefit from discussion
 
-Return ONLY valid JSON (no markdown, no prose) with this schema:
-{{
-  "questions": ["question 1", "question 2", "question 3"],
-  "observations": ["observation 1", "observation 2", "observation 3"]
-}}
+{CODE_INITIAL_ANALYSIS_CONTRACT.format_instructions()}
 
-Remember:
-- Ask 2-4 questions.
-- Keep observations brief and neutral.
 - Be respectful, assume good intentions, and focus on understanding before judging."""
 
     def _build_feedback_prompt(
@@ -297,16 +287,9 @@ Keep your feedback concise but meaningful. For a {experience_level} programmer, 
         Returns:
             Parsed initial analysis result.
         """
-        parsed_json = extract_json_object(response)
-        if parsed_json is not None:
-            questions = parse_string_list(parsed_json, "questions")
-            observations = parse_string_list(parsed_json, "observations")
-            if questions or observations:
-                return CodeInitialAnalysisResult(
-                    questions=questions,
-                    observations=observations,
-                    raw_response=response,
-                )
+        parsed = CODE_INITIAL_ANALYSIS_CONTRACT.parse_response(response)
+        if parsed is not None:
+            return parsed
 
         return self._parse_markdown_initial_response(response)
 
