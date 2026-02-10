@@ -51,6 +51,10 @@ Generate persistent homework-style challenge runs and grade them later:
 
 ## Installation
 
+For full, step-by-step operational guidance (single-user install, shared Linux server as root, and faculty user-space sharing), see:
+
+- `INSTALL_AND_DEPLOYMENT_GUIDE.md`
+
 ### From Source
 
 ```bash
