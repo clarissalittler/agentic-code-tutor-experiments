@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 
 class ProofReader:
@@ -316,4 +316,4 @@ class ProofReader:
         Returns:
             True if valid, False otherwise.
         """
-        return level.lower() in [l.lower() for l in self.EXPERIENCE_LEVELS]
+        return level.lower() in [name.lower() for name in self.EXPERIENCE_LEVELS]

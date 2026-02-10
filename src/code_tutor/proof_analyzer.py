@@ -1,22 +1,48 @@
-"""Proof analysis using Claude API."""
+"""Proof analysis using pluggable LLM providers."""
 
-from typing import Dict, List, Optional, Any
-import anthropic
+from typing import Any, Dict, List, Optional
+
+from .logger import SessionLogger
+from .llm_provider import LLMClient, create_llm_client
+from .models import ProofFeedbackResult, ProofInitialAnalysisResult
+from .response_parsing import (
+    extract_json_object,
+    parse_string_list,
+    parse_string_value,
+)
 
 
 class ProofAnalyzer:
-    """Analyzes mathematical proofs using Claude API with educational approach."""
+    """Analyzes mathematical proofs using LLM APIs with educational approach."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-5",
+        provider: str = "anthropic",
+        base_url: Optional[str] = None,
+        logger: Optional[SessionLogger] = None,
+        log_api_calls: bool = False,
+    ):
         """Initialize the proof analyzer.
 
         Args:
-            api_key: Anthropic API key.
-            model: Claude model to use.
+            api_key: Provider API key.
+            model: Model to use.
+            provider: LLM provider name.
+            base_url: Optional custom API base URL.
+            logger: Optional session logger for API call logging.
+            log_api_calls: Whether to log API calls.
         """
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client: LLMClient = create_llm_client(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
         self.model = model
         self.conversation_history: List[Dict[str, str]] = []
+        self.logger = logger
+        self.log_api_calls = log_api_calls
 
     def analyze_proof(
         self,
@@ -26,7 +52,7 @@ class ProofAnalyzer:
         experience_level: str,
         domain: Optional[str] = None,
         preferences: Optional[Dict] = None,
-    ) -> Dict[str, Any]:
+    ) -> ProofInitialAnalysisResult:
         """Perform initial proof analysis and generate clarifying questions.
 
         Args:
@@ -38,24 +64,24 @@ class ProofAnalyzer:
             preferences: Optional user preferences.
 
         Returns:
-            Dictionary with questions and initial observations.
+            Structured proof analysis result.
         """
         prompt = self._build_initial_prompt(
             content, file_metadata, structure, experience_level, domain, preferences
         )
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
             )
-
-            response_content = response.content[0].text
+            response_content = completion.text
 
             # Store in conversation history
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": response_content})
+            self._log_api_call(prompt, response_content, completion.usage)
 
             return self._parse_initial_response(response_content)
 
@@ -67,7 +93,7 @@ class ProofAnalyzer:
         answers: List[str],
         experience_level: str,
         domain: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> ProofFeedbackResult:
         """Process user's answers to questions and generate feedback.
 
         Args:
@@ -76,21 +102,21 @@ class ProofAnalyzer:
             domain: Mathematical domain context.
 
         Returns:
-            Dictionary with feedback and suggestions.
+            Structured proof feedback result.
         """
         prompt = self._build_feedback_prompt(answers, experience_level, domain)
 
         try:
             self.conversation_history.append({"role": "user", "content": prompt})
 
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=self.conversation_history,
             )
-
-            response_content = response.content[0].text
+            response_content = completion.text
             self.conversation_history.append({"role": "assistant", "content": response_content})
+            self._log_api_call(prompt, response_content, completion.usage)
 
             return self._parse_feedback_response(response_content)
 
@@ -109,19 +135,29 @@ class ProofAnalyzer:
         try:
             self.conversation_history.append({"role": "user", "content": user_message})
 
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=self.conversation_history,
             )
-
-            response_content = response.content[0].text
+            response_content = completion.text
             self.conversation_history.append({"role": "assistant", "content": response_content})
+            self._log_api_call(user_message, response_content, completion.usage)
 
             return response_content
 
         except Exception as e:
             raise ValueError(f"Failed to continue conversation: {e}")
+
+    def _log_api_call(
+        self,
+        prompt: str,
+        response: str,
+        usage: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Log an API call if logging is enabled."""
+        if self.logger and self.log_api_calls:
+            self.logger.log_api_call(self.model, prompt, response, usage=usage)
 
     def _build_initial_prompt(
         self,
@@ -219,24 +255,17 @@ Your task:
    - Proof techniques being employed
    - Areas that might benefit from discussion
 
-Format your response EXACTLY as follows:
+Return ONLY valid JSON (no markdown, no prose) with this schema:
+{{
+  "main_claim": "One sentence describing what is being proved",
+  "questions": ["question 1", "question 2", "question 3"],
+  "observations": ["observation 1", "observation 2", "observation 3"]
+}}
 
-## Main Claim
-[One sentence describing what is being proved]
-
-## Questions
-
-1. [Your first question about the proof]
-2. [Your second question]
-3. [Your third question, if needed]
-
-## Initial Observations
-
-- [Observation 1]
-- [Observation 2]
-- [Observation 3]
-
-Remember: Be respectful, assume the writer has good mathematical intuition, and focus on understanding their approach before judging its correctness or rigor."""
+Remember:
+- Ask 2-4 questions.
+- Keep observations brief and neutral.
+- Be respectful, assume the writer has good mathematical intuition, and focus on understanding their approach before judging its correctness or rigor."""
 
     def _build_feedback_prompt(
         self,
@@ -294,15 +323,32 @@ Based on the mathematician's experience level ({experience_level}) and their exp
 Format your response clearly with these sections. Be encouraging and educational.
 Remember: A {experience_level} might need {'more explanation of fundamentals' if experience_level in ['student', 'undergrad'] else 'engagement with subtle points of rigor'}."""
 
-    def _parse_initial_response(self, response: str) -> Dict[str, Any]:
+    def _parse_initial_response(self, response: str) -> ProofInitialAnalysisResult:
         """Parse the initial analysis response.
 
         Args:
             response: Raw response from Claude.
 
         Returns:
-            Parsed dictionary with questions and observations.
+            Parsed proof analysis result.
         """
+        parsed_json = extract_json_object(response)
+        if parsed_json is not None:
+            main_claim = parse_string_value(parsed_json, "main_claim", "")
+            questions = parse_string_list(parsed_json, "questions")
+            observations = parse_string_list(parsed_json, "observations")
+            if main_claim or questions or observations:
+                return ProofInitialAnalysisResult(
+                    main_claim=main_claim,
+                    questions=questions,
+                    observations=observations,
+                    raw_response=response,
+                )
+
+        return self._parse_markdown_initial_response(response)
+
+    def _parse_markdown_initial_response(self, response: str) -> ProofInitialAnalysisResult:
+        """Fallback parser for legacy heading/list formatted responses."""
         main_claim = ""
         questions = []
         observations = []
@@ -338,26 +384,26 @@ Remember: A {experience_level} might need {'more explanation of fundamentals' if
                 if cleaned:
                     observations.append(cleaned)
 
-        return {
-            "main_claim": main_claim,
-            "questions": questions,
-            "observations": observations,
-            "raw_response": response,
-        }
+        return ProofInitialAnalysisResult(
+            main_claim=main_claim,
+            questions=questions,
+            observations=observations,
+            raw_response=response,
+        )
 
-    def _parse_feedback_response(self, response: str) -> Dict[str, Any]:
+    def _parse_feedback_response(self, response: str) -> ProofFeedbackResult:
         """Parse the feedback response.
 
         Args:
             response: Raw response from Claude.
 
         Returns:
-            Parsed dictionary with feedback sections.
+            Parsed proof feedback result.
         """
-        return {
-            "feedback": response,
-            "raw_response": response,
-        }
+        return ProofFeedbackResult(
+            feedback=response,
+            raw_response=response,
+        )
 
     def reset_conversation(self):
         """Reset the conversation history."""

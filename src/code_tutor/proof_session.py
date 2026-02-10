@@ -11,6 +11,17 @@ from .config import ConfigManager
 from .proof_reader import ProofReader
 from .proof_analyzer import ProofAnalyzer
 from .logger import SessionLogger
+from .llm_provider import LLMClient, create_llm_client
+from .response_parsing import (
+    extract_json_object,
+    parse_bool_value,
+    parse_string_value,
+    parse_understanding_achieved,
+)
+from .session_runtime import (
+    build_session_runtime,
+    map_code_to_proof_experience_level,
+)
 
 
 class ProofSession:
@@ -28,14 +39,8 @@ class ProofSession:
         self.reader = ProofReader()
         self.analyzer: Optional[ProofAnalyzer] = None
         self.current_proof: Optional[Dict[str, Any]] = None
-
-        # Initialize logger if enabled
+        self.log_api_calls = False
         self.logger: Optional[SessionLogger] = None
-        if self.config.is_logging_enabled():
-            self.logger = SessionLogger(
-                config_dir=self.config.config_dir,
-                enabled=True
-            )
 
     def start_review(
         self,
@@ -51,27 +56,31 @@ class ProofSession:
             experience_level: Optional experience level override.
         """
         try:
-            # Load configuration
-            config = self.config.load()
-            api_key = self.config.get_api_key()
-            model = self.config.get_model()
+            runtime = build_session_runtime(self.config, reload_config=True)
+            self.logger = runtime.logger
+            self.log_api_calls = runtime.log_api_calls
+
+            api_key = runtime.llm.api_key
+            model = runtime.llm.model
+            provider = runtime.llm.provider
+            base_url = runtime.llm.base_url
 
             # Use code experience level mapped to proof levels
-            code_level = self.config.get("experience_level", "intermediate")
+            code_level = runtime.experience_level
             if experience_level is None:
-                # Map code experience to proof experience
-                level_map = {
-                    "beginner": "student",
-                    "intermediate": "undergrad",
-                    "advanced": "graduate",
-                    "expert": "researcher",
-                }
-                experience_level = level_map.get(code_level, "undergrad")
+                experience_level = map_code_to_proof_experience_level(code_level)
 
-            preferences = self.config.get("preferences", {})
+            preferences = runtime.preferences
 
             # Initialize analyzer
-            self.analyzer = ProofAnalyzer(api_key=api_key, model=model)
+            self.analyzer = ProofAnalyzer(
+                api_key=api_key,
+                model=model,
+                provider=provider,
+                base_url=base_url,
+                logger=self.logger,
+                log_api_calls=self.log_api_calls,
+            )
 
             # Read the proof file
             self.console.print(f"[dim]Reading proof from {file_path}...[/dim]\n")
@@ -92,6 +101,7 @@ class ProofSession:
                     "format": self.current_proof["metadata"]["format"],
                     "domain": domain or self.current_proof["metadata"].get("detected_domain"),
                     "experience_level": experience_level,
+                    "provider": provider,
                     "model": model,
                 })
 
@@ -213,22 +223,22 @@ class ProofSession:
             return
 
         # Display main claim
-        if analysis.get("main_claim"):
+        if analysis.main_claim:
             self.console.print(Panel.fit(
-                f"[bold]Main Claim:[/bold] {analysis['main_claim']}",
+                f"[bold]Main Claim:[/bold] {analysis.main_claim}",
                 border_style="green",
             ))
             self.console.print()
 
         # Display observations
-        if analysis.get("observations"):
+        if analysis.observations:
             self.console.print("[bold cyan]Initial Observations:[/bold cyan]\n")
-            for obs in analysis["observations"]:
+            for obs in analysis.observations:
                 self.console.print(f"  • {obs}")
             self.console.print()
 
         # Ask questions
-        questions = analysis.get("questions", [])
+        questions = analysis.questions
         if not questions:
             self.console.print("[yellow]No clarifying questions generated.[/yellow]")
             return
@@ -276,7 +286,7 @@ class ProofSession:
         ))
         self.console.print()
 
-        md = Markdown(feedback_data.get("feedback", "No feedback generated."))
+        md = Markdown(feedback_data.feedback)
         self.console.print(md)
         self.console.print()
 
@@ -330,21 +340,15 @@ class ProofTeachingSession:
         """
         self.config = config_manager
         self.console = console or Console()
-        self.client = None
+        self.client: Optional[LLMClient] = None
         self.model: str = ""
         self.conversation_history: List[Dict[str, str]] = []
         self.topic: str = ""
         self.domain: str = ""
         self.round_number: int = 0
         self.max_rounds: int = 5
-
-        # Initialize logger if enabled
+        self.log_api_calls = False
         self.logger: Optional[SessionLogger] = None
-        if self.config.is_logging_enabled():
-            self.logger = SessionLogger(
-                config_dir=self.config.config_dir,
-                enabled=True
-            )
 
     def start_session(self, domain: Optional[str] = None) -> None:
         """Start an interactive proof teaching session.
@@ -352,26 +356,26 @@ class ProofTeachingSession:
         Args:
             domain: Optional mathematical domain to focus on.
         """
-        import anthropic
-
         try:
-            # Load configuration
-            config = self.config.load()
-            api_key = self.config.get_api_key()
-            self.model = self.config.get_model()
+            runtime = build_session_runtime(self.config, reload_config=True)
+            self.logger = runtime.logger
+            self.log_api_calls = runtime.log_api_calls
+
+            api_key = runtime.llm.api_key
+            self.model = runtime.llm.model
+            provider = runtime.llm.provider
+            base_url = runtime.llm.base_url
 
             # Map experience level
-            code_level = self.config.get("experience_level", "intermediate")
-            level_map = {
-                "beginner": "student",
-                "intermediate": "undergrad",
-                "advanced": "graduate",
-                "expert": "researcher",
-            }
-            experience_level = level_map.get(code_level, "undergrad")
+            code_level = runtime.experience_level
+            experience_level = map_code_to_proof_experience_level(code_level)
 
             # Initialize client
-            self.client = anthropic.Anthropic(api_key=api_key)
+            self.client = create_llm_client(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+            )
 
             # Welcome message
             self._display_welcome()
@@ -391,6 +395,7 @@ class ProofTeachingSession:
                     "topic": self.topic,
                     "domain": self.domain,
                     "experience_level": experience_level,
+                    "provider": provider,
                     "model": self.model,
                 })
 
@@ -552,7 +557,7 @@ The error should be:
 
 For a {experience_level} level mathematician, adjust the sophistication accordingly.
 
-Format your response as:
+        Format your response as:
 
 ## Theorem
 [State the theorem or claim being "proved"]
@@ -566,16 +571,22 @@ Format your response as:
 - Issue 2: [if applicable]"""
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=2048,
                 messages=self.conversation_history + [{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": content})
+            if self.logger and self.log_api_calls:
+                self.logger.log_api_call(
+                    self.model,
+                    prompt,
+                    content,
+                    usage=completion.usage,
+                )
 
             return self._parse_proof_response(content)
 
@@ -707,30 +718,46 @@ As a {experience_level} level student, evaluate:
 2. Is their explanation mathematically sound?
 3. Did they explain WHY it's an error?
 
-Respond with:
+Respond as ONLY valid JSON (no markdown wrapper) with this schema:
+{{
+  "feedback_markdown": "Constructive feedback on their analysis",
+  "understanding_achieved": true
+}}
 
-## Feedback
-[Constructive feedback on their analysis. If they missed something, guide them toward it without giving it away entirely. If they got it, confirm and expand on the insight.]
-
-## Understanding Achieved
-[YES if they identified the key issue(s), NO if they need more guidance]"""
+Set `understanding_achieved` to true if they identified key issues; otherwise false."""
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=1024,
                 messages=self.conversation_history + [{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": content})
+            if self.logger and self.log_api_calls:
+                self.logger.log_api_call(
+                    self.model,
+                    prompt,
+                    content,
+                    usage=completion.usage,
+                )
 
-            understanding = "YES" in content.upper() and "Understanding Achieved" in content
+            parsed_json = extract_json_object(content)
+            if parsed_json is not None:
+                parsed_understanding = parse_bool_value(parsed_json, "understanding_achieved")
+                parsed_feedback = parse_string_value(parsed_json, "feedback_markdown", "")
+                if parsed_understanding is not None and parsed_feedback:
+                    return {
+                        "understanding_achieved": parsed_understanding,
+                        "feedback": parsed_feedback,
+                    }
+
+            understanding = parse_understanding_achieved(content)
 
             return {
-                "understanding_achieved": understanding,
+                "understanding_achieved": bool(understanding),
                 "feedback": content,
             }
 
@@ -751,7 +778,7 @@ Respond with:
 
     def _display_conclusion(self) -> None:
         """Display conclusion message."""
-        self.console.print(f"\n\n[bold green]Proof Teaching Session Complete![/bold green]")
+        self.console.print("\n\n[bold green]Proof Teaching Session Complete![/bold green]")
         self.console.print(
             f"[dim]We completed {self.round_number} round(s) on: {self.topic} ({self.domain})[/dim]\n"
         )

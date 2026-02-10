@@ -1,22 +1,47 @@
-"""Code analysis using Claude API."""
+"""Code analysis using pluggable LLM providers."""
 
-from typing import Dict, List, Optional
-import anthropic
+from typing import Any, Dict, List, Optional
+
+from .logger import SessionLogger
+from .llm_provider import LLMClient, create_llm_client
+from .models import CodeFeedbackResult, CodeInitialAnalysisResult
+from .response_parsing import (
+    extract_json_object,
+    parse_string_list,
+)
 
 
 class CodeAnalyzer:
-    """Analyzes code using Claude API with educational, respectful approach."""
+    """Analyzes code using LLM APIs with educational, respectful approach."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-5",
+        provider: str = "anthropic",
+        base_url: Optional[str] = None,
+        logger: Optional[SessionLogger] = None,
+        log_api_calls: bool = False,
+    ):
         """Initialize the code analyzer.
 
         Args:
-            api_key: Anthropic API key.
-            model: Claude model to use.
+            api_key: Provider API key.
+            model: Model to use.
+            provider: LLM provider name.
+            base_url: Optional custom API base URL.
+            logger: Optional session logger for API call logging.
+            log_api_calls: Whether to log API calls.
         """
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client: LLMClient = create_llm_client(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
         self.model = model
         self.conversation_history: List[Dict[str, str]] = []
+        self.logger = logger
+        self.log_api_calls = log_api_calls
 
     def analyze_code(
         self,
@@ -24,7 +49,7 @@ class CodeAnalyzer:
         file_metadata: Dict,
         experience_level: str,
         preferences: Dict,
-    ) -> Dict[str, any]:
+    ) -> CodeInitialAnalysisResult:
         """Perform initial code analysis and generate clarifying questions.
 
         Args:
@@ -34,22 +59,22 @@ class CodeAnalyzer:
             preferences: User preferences (question_style, focus_areas, etc.).
 
         Returns:
-            Dictionary with questions and initial observations.
+            Structured analysis result with questions and observations.
         """
         prompt = self._build_initial_prompt(code, file_metadata, experience_level, preferences)
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             # Store in conversation history
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": content})
+            self._log_api_call(prompt, content, completion.usage)
 
             return self._parse_initial_response(content)
 
@@ -61,7 +86,7 @@ class CodeAnalyzer:
         answers: List[str],
         experience_level: str,
         preferences: Dict,
-    ) -> Dict[str, any]:
+    ) -> CodeFeedbackResult:
         """Process user's answers to questions and generate feedback.
 
         Args:
@@ -70,7 +95,7 @@ class CodeAnalyzer:
             preferences: User preferences.
 
         Returns:
-            Dictionary with feedback and suggestions.
+            Structured feedback result.
         """
         prompt = self._build_feedback_prompt(answers, experience_level, preferences)
 
@@ -78,16 +103,16 @@ class CodeAnalyzer:
             # Add the answers to conversation history
             self.conversation_history.append({"role": "user", "content": prompt})
 
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=self.conversation_history,
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             # Store response in history
             self.conversation_history.append({"role": "assistant", "content": content})
+            self._log_api_call(prompt, content, completion.usage)
 
             return self._parse_feedback_response(content)
 
@@ -106,19 +131,29 @@ class CodeAnalyzer:
         try:
             self.conversation_history.append({"role": "user", "content": user_message})
 
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=self.conversation_history,
             )
-
-            content = response.content[0].text
+            content = completion.text
             self.conversation_history.append({"role": "assistant", "content": content})
+            self._log_api_call(user_message, content, completion.usage)
 
             return content
 
         except Exception as e:
             raise ValueError(f"Failed to continue conversation: {e}")
+
+    def _log_api_call(
+        self,
+        prompt: str,
+        response: str,
+        usage: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Log an API call if logging is enabled."""
+        if self.logger and self.log_api_calls:
+            self.logger.log_api_call(self.model, prompt, response, usage=usage)
 
     def _build_initial_prompt(
         self,
@@ -193,26 +228,21 @@ Your task:
    - Any patterns or choices that seem intentional
    - Trade-offs the programmer considered
 
-3. Provide brief initial observations (not criticism) about:
+        3. Provide brief initial observations (not criticism) about:
    - Overall structure and organization
    - Notable patterns or approaches used
    - Areas that might benefit from discussion
 
-Format your response EXACTLY as follows:
+Return ONLY valid JSON (no markdown, no prose) with this schema:
+{{
+  "questions": ["question 1", "question 2", "question 3"],
+  "observations": ["observation 1", "observation 2", "observation 3"]
+}}
 
-## Questions
-
-1. [Your first question]
-2. [Your second question]
-3. [Your third question, if needed]
-
-## Initial Observations
-
-- [Observation 1]
-- [Observation 2]
-- [Observation 3]
-
-Remember: Be respectful, assume good intentions, and focus on understanding before judging."""
+Remember:
+- Ask 2-4 questions.
+- Keep observations brief and neutral.
+- Be respectful, assume good intentions, and focus on understanding before judging."""
 
     def _build_feedback_prompt(
         self,
@@ -258,15 +288,30 @@ Remember their focus areas: {', '.join(preferences.get('focus_areas', ['general'
 
 Keep your feedback concise but meaningful. For a {experience_level} programmer, adjust your explanations accordingly."""
 
-    def _parse_initial_response(self, response: str) -> Dict[str, any]:
+    def _parse_initial_response(self, response: str) -> CodeInitialAnalysisResult:
         """Parse the initial analysis response.
 
         Args:
             response: Raw response from Claude.
 
         Returns:
-            Parsed dictionary with questions and observations.
+            Parsed initial analysis result.
         """
+        parsed_json = extract_json_object(response)
+        if parsed_json is not None:
+            questions = parse_string_list(parsed_json, "questions")
+            observations = parse_string_list(parsed_json, "observations")
+            if questions or observations:
+                return CodeInitialAnalysisResult(
+                    questions=questions,
+                    observations=observations,
+                    raw_response=response,
+                )
+
+        return self._parse_markdown_initial_response(response)
+
+    def _parse_markdown_initial_response(self, response: str) -> CodeInitialAnalysisResult:
+        """Fallback parser for legacy heading/list formatted responses."""
         questions = []
         observations = []
 
@@ -297,27 +342,27 @@ Keep your feedback concise but meaningful. For a {experience_level} programmer, 
                 if cleaned:
                     observations.append(cleaned)
 
-        return {
-            "questions": questions,
-            "observations": observations,
-            "raw_response": response,
-        }
+        return CodeInitialAnalysisResult(
+            questions=questions,
+            observations=observations,
+            raw_response=response,
+        )
 
-    def _parse_feedback_response(self, response: str) -> Dict[str, any]:
+    def _parse_feedback_response(self, response: str) -> CodeFeedbackResult:
         """Parse the feedback response.
 
         Args:
             response: Raw response from Claude.
 
         Returns:
-            Parsed dictionary with feedback sections.
+            Parsed feedback result.
         """
         # For now, return the raw response
         # Could be enhanced to parse into sections
-        return {
-            "feedback": response,
-            "raw_response": response,
-        }
+        return CodeFeedbackResult(
+            feedback=response,
+            raw_response=response,
+        )
 
     def reset_conversation(self):
         """Reset the conversation history."""

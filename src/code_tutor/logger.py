@@ -1,24 +1,36 @@
 """Logging system for Code Tutor student interactions."""
 
 import json
-import os
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 
 class SessionLogger:
     """Manages logging of student interactions for debugging and analysis."""
 
-    def __init__(self, config_dir: Optional[Path] = None, enabled: bool = True):
+    @staticmethod
+    def _utc_now_iso() -> str:
+        """Return an ISO8601 timestamp in UTC."""
+        return datetime.now(timezone.utc).isoformat()
+
+    def __init__(
+        self,
+        config_dir: Optional[Path] = None,
+        enabled: bool = True,
+        redact_content: bool = False,
+    ):
         """Initialize the session logger.
 
         Args:
             config_dir: Optional custom configuration directory path.
             enabled: Whether logging is enabled.
+            redact_content: Whether to redact sensitive content before writing logs.
         """
         self.enabled = enabled
+        self.redact_content = redact_content
         if config_dir is None:
             config_dir = Path.home() / ".config" / "code-tutor"
 
@@ -27,7 +39,7 @@ class SessionLogger:
 
         # Current session data
         self.session_id = str(uuid4())
-        self.session_start = datetime.utcnow().isoformat()
+        self.session_start = self._utc_now_iso()
         self.session_type = None
         self.events: List[Dict[str, Any]] = []
         self.metadata: Dict[str, Any] = {}
@@ -50,7 +62,7 @@ class SessionLogger:
 
         event = {
             "event_type": "session_start",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "session_type": session_type,
             "metadata": self.metadata,
@@ -71,13 +83,14 @@ class SessionLogger:
 
         event = {
             "event_type": "user_input",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "input_type": input_type,
             "content": content,
             "context": context or {},
         }
 
+        self._apply_redaction(event, ["content"])
         self._log_event(event)
 
     def log_ai_response(self, response_type: str, content: str, context: Optional[Dict[str, Any]] = None) -> None:
@@ -93,13 +106,14 @@ class SessionLogger:
 
         event = {
             "event_type": "ai_response",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "response_type": response_type,
             "content": content,
             "context": context or {},
         }
 
+        self._apply_redaction(event, ["content"])
         self._log_event(event)
 
     def log_code_analysis(self, file_path: str, code_content: str, analysis: str) -> None:
@@ -115,13 +129,14 @@ class SessionLogger:
 
         event = {
             "event_type": "code_analysis",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "file_path": file_path,
             "code_content": code_content,
             "analysis": analysis,
         }
 
+        self._apply_redaction(event, ["code_content", "analysis"])
         self._log_event(event)
 
     def log_teaching_round(self, round_num: int, topic: str, language: str,
@@ -142,7 +157,7 @@ class SessionLogger:
 
         event = {
             "event_type": "teaching_round",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "round_number": round_num,
             "topic": topic,
@@ -152,6 +167,7 @@ class SessionLogger:
             "ai_evaluation": ai_evaluation,
         }
 
+        self._apply_redaction(event, ["flawed_code", "student_explanation", "ai_evaluation"])
         self._log_event(event)
 
     def log_api_call(self, model: str, prompt: str, response: str,
@@ -169,7 +185,7 @@ class SessionLogger:
 
         event = {
             "event_type": "api_call",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "model": model,
             "prompt": prompt,
@@ -177,6 +193,7 @@ class SessionLogger:
             "usage": usage or {},
         }
 
+        self._apply_redaction(event, ["prompt", "response"])
         self._log_event(event)
 
     def log_error(self, error_type: str, message: str, traceback: Optional[str] = None) -> None:
@@ -192,7 +209,7 @@ class SessionLogger:
 
         event = {
             "event_type": "error",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
             "error_type": error_type,
             "message": message,
@@ -208,9 +225,11 @@ class SessionLogger:
 
         event = {
             "event_type": "session_end",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": self._utc_now_iso(),
             "session_id": self.session_id,
-            "duration_seconds": (datetime.utcnow() - datetime.fromisoformat(self.session_start)).total_seconds(),
+            "duration_seconds": (
+                datetime.now(timezone.utc) - datetime.fromisoformat(self.session_start)
+            ).total_seconds(),
         }
 
         self._log_event(event)
@@ -227,9 +246,32 @@ class SessionLogger:
         try:
             with open(self.log_file, "a") as f:
                 f.write(json.dumps(event) + "\n")
-        except IOError as e:
+        except IOError:
             # If we can't write to the log file, store in memory only
             pass
+
+    def _apply_redaction(self, event: Dict[str, Any], fields: List[str]) -> None:
+        """Redact sensitive fields in an event if configured."""
+        if not self.redact_content:
+            return
+
+        for field in fields:
+            value = event.get(field)
+            if isinstance(value, str) and value:
+                redacted, meta = self._redact_text(value, field)
+                event[field] = redacted
+                event.update(meta)
+
+    def _redact_text(self, text: str, field: str) -> Tuple[str, Dict[str, Any]]:
+        """Return a redacted placeholder and metadata for a text field."""
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        redacted = f"[REDACTED:{field} len={len(text)} sha256={digest[:12]}]"
+        metadata = {
+            f"{field}_redacted": True,
+            f"{field}_length": len(text),
+            f"{field}_sha256": digest,
+        }
+        return redacted, metadata
 
     def export_session(self, output_path: Optional[Path] = None) -> Path:
         """Export the current session to a JSON file.
@@ -247,7 +289,7 @@ class SessionLogger:
             "session_id": self.session_id,
             "session_type": self.session_type,
             "start_time": self.session_start,
-            "end_time": datetime.utcnow().isoformat(),
+            "end_time": self._utc_now_iso(),
             "metadata": self.metadata,
             "events": self.events,
             "event_count": len(self.events),
@@ -318,7 +360,7 @@ class SessionLogger:
             output_path = Path.cwd() / f"code_tutor_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         export_data = {
-            "export_timestamp": datetime.utcnow().isoformat(),
+            "export_timestamp": SessionLogger._utc_now_iso(),
             "total_sessions": len(sessions),
             "sessions": sessions,
         }

@@ -1,23 +1,49 @@
-"""Exercise generation using Claude API."""
+"""Exercise generation using pluggable LLM providers."""
 
-from typing import Dict, List, Optional, Any
-import anthropic
+from typing import Any, Dict, List, Optional
+
+from .logger import SessionLogger
+from .llm_provider import LLMClient, create_llm_client
+from .models import ExerciseGenerationResult, ExerciseReviewResult
+from .response_parsing import (
+    extract_json_object,
+    parse_string_list,
+    parse_string_value,
+)
 
 from .exercise_manager import ExerciseManager
 
 
 class ExerciseGenerator:
-    """Generates coding exercises using Claude API."""
+    """Generates coding exercises using pluggable LLM providers."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-5",
+        provider: str = "anthropic",
+        base_url: Optional[str] = None,
+        logger: Optional[SessionLogger] = None,
+        log_api_calls: bool = False,
+    ):
         """Initialize the exercise generator.
 
         Args:
-            api_key: Anthropic API key.
-            model: Claude model to use.
+            api_key: Provider API key.
+            model: Model to use.
+            provider: LLM provider name.
+            base_url: Optional custom API base URL.
+            logger: Optional session logger for API call logging.
+            log_api_calls: Whether to log API calls.
         """
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client: LLMClient = create_llm_client(
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
         self.model = model
+        self.logger = logger
+        self.log_api_calls = log_api_calls
 
     def generate_exercise(
         self,
@@ -26,7 +52,7 @@ class ExerciseGenerator:
         exercise_type: str = ExerciseManager.TYPE_IMPLEMENTATION,
         difficulty: str = "intermediate",
         experience_level: str = "intermediate",
-    ) -> Dict[str, Any]:
+    ) -> ExerciseGenerationResult:
         """Generate an exercise on a given topic.
 
         Args:
@@ -37,20 +63,20 @@ class ExerciseGenerator:
             experience_level: User's experience level.
 
         Returns:
-            Dictionary with generated exercise content.
+            Structured generated exercise content.
         """
         prompt = self._build_generation_prompt(
             topic, language, exercise_type, difficulty, experience_level
         )
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
+            self._log_api_call(prompt, content, completion.usage)
             return self._parse_exercise_response(content)
 
         except Exception as e:
@@ -131,33 +157,15 @@ Difficulty Guidance: {difficulty_guidance.get(difficulty, difficulty_guidance['i
 Exercise Type Instructions:
 {type_instructions.get(exercise_type, type_instructions[ExerciseManager.TYPE_IMPLEMENTATION])}
 
-Generate a complete exercise with the following format:
-
-## Instructions
-[Clear, detailed instructions for what the learner should do. Be specific about requirements and constraints. 2-4 paragraphs.]
-
-## Learning Objectives
-- [Objective 1 - what concept will they understand?]
-- [Objective 2]
-- [Objective 3]
-
-## Starter Code
-```{language.lower()}
-[The code template/buggy code/signature that the learner will work with]
-```
-
-## Test Code
-```{language.lower()}
-[Optional but recommended: test cases the learner can run to verify their solution]
-```
-
-## Hints
-1. [First hint - gentle nudge in the right direction]
-2. [Second hint - more specific guidance]
-3. [Third hint - nearly gives away the approach but not the answer]
-
-## Solution Explanation
-[Brief explanation of what the correct solution looks like and why - this will be hidden from the learner]
+Return ONLY valid JSON (no markdown, no prose) with this schema:
+{{
+  "instructions": "Detailed learner instructions (2-4 paragraphs)",
+  "learning_objectives": ["objective 1", "objective 2", "objective 3"],
+  "starter_code": "Code template/buggy code/signature",
+  "test_code": "Optional runnable tests, or empty string",
+  "hints": ["hint 1", "hint 2", "hint 3"],
+  "solution_explanation": "Brief hidden solution explanation"
+}}
 
 Remember:
 - Make the exercise practical and relevant
@@ -165,15 +173,51 @@ Remember:
 - Hints should progressively reveal more without giving away the answer
 - Test code should be runnable if the learner has the standard testing framework"""
 
-    def _parse_exercise_response(self, response: str) -> Dict[str, Any]:
+    def _log_api_call(
+        self,
+        prompt: str,
+        response: str,
+        usage: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Log an API call if logging is enabled."""
+        if self.logger and self.log_api_calls:
+            self.logger.log_api_call(self.model, prompt, response, usage=usage)
+
+    def _parse_exercise_response(self, response: str) -> ExerciseGenerationResult:
         """Parse the exercise generation response.
 
         Args:
             response: Raw response from Claude.
 
         Returns:
-            Parsed dictionary with exercise components.
+            Parsed exercise generation result.
         """
+        parsed_json = extract_json_object(response)
+        if parsed_json is not None:
+            instructions = parse_string_value(parsed_json, "instructions", "")
+            learning_objectives = parse_string_list(parsed_json, "learning_objectives")
+            starter_code = parse_string_value(parsed_json, "starter_code", "")
+            test_code = parse_string_value(parsed_json, "test_code", "")
+            hints = parse_string_list(parsed_json, "hints")
+            solution_explanation = parse_string_value(
+                parsed_json,
+                "solution_explanation",
+                "",
+            )
+            if instructions or starter_code or learning_objectives or hints:
+                return ExerciseGenerationResult(
+                    instructions=instructions,
+                    learning_objectives=learning_objectives,
+                    starter_code=starter_code,
+                    test_code=test_code,
+                    hints=hints,
+                    solution_explanation=solution_explanation,
+                )
+
+        return self._parse_markdown_exercise_response(response)
+
+    def _parse_markdown_exercise_response(self, response: str) -> ExerciseGenerationResult:
+        """Fallback parser for legacy heading/markdown formatted responses."""
         sections = {
             "instructions": "",
             "learning_objectives": [],
@@ -255,7 +299,14 @@ Remember:
         if current_section and text_lines:
             self._save_section(sections, current_section, text_lines)
 
-        return sections
+        return ExerciseGenerationResult(
+            instructions=sections["instructions"],
+            learning_objectives=sections["learning_objectives"],
+            starter_code=sections["starter_code"],
+            test_code=sections["test_code"],
+            hints=sections["hints"],
+            solution_explanation=sections["solution_explanation"],
+        )
 
     def _save_section(
         self, sections: Dict, section_name: str, lines: List[str]
@@ -292,7 +343,7 @@ Remember:
         submitted_code: str,
         language: str,
         experience_level: str = "intermediate",
-    ) -> Dict[str, Any]:
+    ) -> ExerciseReviewResult:
         """Review a submitted exercise solution.
 
         Args:
@@ -302,7 +353,7 @@ Remember:
             experience_level: User's experience level.
 
         Returns:
-            Dictionary with review feedback.
+            Structured review result.
         """
         prompt = f"""You are reviewing a coding exercise submission from a {experience_level} programmer.
 
@@ -316,46 +367,58 @@ Submitted Code:
 {submitted_code}
 ```
 
-Please provide a constructive review:
-
-## Correctness
-[Does the solution correctly address the exercise requirements? Are there any bugs or issues?]
-
-## Code Quality
-[Comment on style, readability, naming, and organization]
-
-## Understanding Demonstrated
-[Based on the solution, what concepts does the learner seem to understand well? What might need more practice?]
-
-## Suggestions
-[Specific, actionable suggestions for improvement]
-
-## Overall Assessment
-[NEEDS_WORK / ACCEPTABLE / GOOD / EXCELLENT]
-[Brief summary of the submission quality]
+Provide a constructive review as ONLY valid JSON (no markdown wrapper) with this schema:
+{{
+  "feedback_markdown": "Markdown feedback with sections: Correctness, Code Quality, Understanding Demonstrated, Suggestions, Overall Assessment",
+  "assessment": "NEEDS_WORK | ACCEPTABLE | GOOD | EXCELLENT"
+}}
 
 Be encouraging but honest. Focus on learning and improvement."""
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=2048,
                 messages=[{"role": "user", "content": prompt}],
             )
+            content = completion.text
+            self._log_api_call(prompt, content, completion.usage)
 
-            content = response.content[0].text
+            parsed_json = extract_json_object(content)
+            if parsed_json is not None:
+                feedback = parse_string_value(parsed_json, "feedback_markdown", "")
+                if not feedback:
+                    feedback = parse_string_value(parsed_json, "feedback", "")
+                assessment = self._normalize_assessment(
+                    parse_string_value(parsed_json, "assessment", "ACCEPTABLE")
+                )
+                if feedback:
+                    return ExerciseReviewResult(
+                        feedback=feedback,
+                        assessment=assessment,
+                    )
 
-            # Parse assessment
-            assessment = "ACCEPTABLE"
-            for level in ["EXCELLENT", "GOOD", "ACCEPTABLE", "NEEDS_WORK"]:
-                if level in content:
-                    assessment = level
-                    break
+            # Fallback: if the model ignored JSON instructions.
+            feedback = content
+            assessment = self._normalize_assessment(content)
 
-            return {
-                "feedback": content,
-                "assessment": assessment,
-            }
+            return ExerciseReviewResult(
+                feedback=feedback,
+                assessment=assessment,
+            )
 
         except Exception as e:
             raise ValueError(f"Failed to review submission: {e}")
+
+    @staticmethod
+    def _normalize_assessment(raw_value: str) -> str:
+        """Normalize review assessment to a supported label."""
+        normalized = (raw_value or "").strip().upper()
+        allowed = {"NEEDS_WORK", "ACCEPTABLE", "GOOD", "EXCELLENT"}
+        if normalized in allowed:
+            return normalized
+
+        for level in ["EXCELLENT", "GOOD", "ACCEPTABLE", "NEEDS_WORK"]:
+            if level in normalized:
+                return level
+        return "ACCEPTABLE"

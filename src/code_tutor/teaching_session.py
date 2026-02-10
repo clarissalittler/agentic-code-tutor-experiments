@@ -1,7 +1,6 @@
 """Interactive teaching mode for learning through correcting mistakes."""
 
 from typing import Dict, List, Optional
-import anthropic
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -10,6 +9,14 @@ from rich.syntax import Syntax
 
 from .config import ConfigManager
 from .logger import SessionLogger
+from .llm_provider import LLMClient, create_llm_client
+from .response_parsing import (
+    extract_json_object,
+    parse_bool_value,
+    parse_string_value,
+    parse_understanding_achieved,
+)
+from .session_runtime import build_session_runtime
 
 
 class TeachingSession:
@@ -24,32 +31,35 @@ class TeachingSession:
         """
         self.config = config_manager
         self.console = console or Console()
-        self.client: Optional[anthropic.Anthropic] = None
+        self.client: Optional[LLMClient] = None
         self.model: str = ""
         self.conversation_history: List[Dict[str, str]] = []
         self.topic: str = ""
         self.round_number: int = 0
         self.max_rounds: int = 5
+        self.log_api_calls = False
 
-        # Initialize logger if enabled
         self.logger: Optional[SessionLogger] = None
-        if self.config.is_logging_enabled():
-            self.logger = SessionLogger(
-                config_dir=self.config.config_dir,
-                enabled=True
-            )
 
     def start_session(self) -> None:
         """Start an interactive teaching session."""
         try:
-            # Load configuration
-            config = self.config.load()
-            api_key = self.config.get_api_key()
-            self.model = self.config.get_model()
-            experience_level = self.config.get("experience_level", "intermediate")
+            runtime = build_session_runtime(self.config, reload_config=True)
+            self.logger = runtime.logger
+            self.log_api_calls = runtime.log_api_calls
+
+            api_key = runtime.llm.api_key
+            self.model = runtime.llm.model
+            provider = runtime.llm.provider
+            base_url = runtime.llm.base_url
+            experience_level = runtime.experience_level
 
             # Initialize client
-            self.client = anthropic.Anthropic(api_key=api_key)
+            self.client = create_llm_client(
+                provider=provider,
+                api_key=api_key,
+                base_url=base_url,
+            )
 
             # Welcome message
             self._display_welcome()
@@ -66,6 +76,7 @@ class TeachingSession:
                     "topic": self.topic,
                     "language": language,
                     "experience_level": experience_level,
+                    "provider": provider,
                     "model": self.model,
                 })
 
@@ -228,17 +239,23 @@ class TeachingSession:
         prompt = self._build_code_generation_prompt(experience_level, language)
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=2048,
                 messages=self.conversation_history + [{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             # Store in conversation history
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": content})
+            if self.logger and self.log_api_calls:
+                self.logger.log_api_call(
+                    self.model,
+                    prompt,
+                    content,
+                    usage=completion.usage,
+                )
 
             return self._parse_code_response(content)
 
@@ -424,29 +441,33 @@ Evaluate the teacher's hints:
 3. Did they ask good guiding questions that promote discovery?
 4. How well did they balance between being helpful and letting you learn?
 
-Respond as the student, staying in character:
+Respond as ONLY valid JSON (no markdown wrapper) with this schema:
+{{
+  "student_response_markdown": "Student response in character",
+  "teaching_quality_assessment": "Brief internal note on teaching quality",
+  "understanding_achieved": true
+}}
 
-## Student Response
-[React to their hints. If the hints were good, show you're getting closer to understanding. If they directly gave the answer, acknowledge you got it but note it would have been better to discover it yourself. If hints were too vague, ask for clarification.]
-
-## Teaching Quality Assessment
-[Brief internal note on teaching quality: Were the hints appropriately scaffolded? Did they promote active learning?]
-
-## Understanding Achieved
-[YES if the student has reached understanding through good hints, NO if more scaffolding is needed]"""
+Set `understanding_achieved` to true only if the student reached understanding through good hints; otherwise false."""
 
         try:
-            response = self.client.messages.create(
+            completion = self.client.complete_with_metadata(
                 model=self.model,
                 max_tokens=1024,
                 messages=self.conversation_history + [{"role": "user", "content": prompt}],
             )
-
-            content = response.content[0].text
+            content = completion.text
 
             # Store in history
             self.conversation_history.append({"role": "user", "content": prompt})
             self.conversation_history.append({"role": "assistant", "content": content})
+            if self.logger and self.log_api_calls:
+                self.logger.log_api_call(
+                    self.model,
+                    prompt,
+                    content,
+                    usage=completion.usage,
+                )
 
             return self._parse_evaluation_response(content)
 
@@ -463,7 +484,27 @@ Respond as the student, staying in character:
         Returns:
             Dictionary with evaluation data.
         """
-        understanding_achieved = "YES" in response.upper() and "Understanding Achieved" in response
+        parsed_json = extract_json_object(response)
+        if parsed_json is not None:
+            understanding_achieved = parse_bool_value(parsed_json, "understanding_achieved")
+            student_response = parse_string_value(parsed_json, "student_response_markdown", "")
+            quality = parse_string_value(parsed_json, "teaching_quality_assessment", "")
+
+            if understanding_achieved is not None and (student_response or quality):
+                feedback_sections = []
+                if student_response:
+                    feedback_sections.append(student_response)
+                if quality:
+                    feedback_sections.append(
+                        f"## Teaching Quality Assessment\n{quality}"
+                    )
+
+                return {
+                    "understanding_achieved": understanding_achieved,
+                    "feedback": "\n\n".join(feedback_sections),
+                }
+
+        understanding_achieved = bool(parse_understanding_achieved(response))
 
         return {
             "understanding_achieved": understanding_achieved,
@@ -483,7 +524,7 @@ Respond as the student, staying in character:
 
     def _display_conclusion(self) -> None:
         """Display conclusion message."""
-        self.console.print(f"\n\n[bold green]Teaching Session Complete![/bold green]")
+        self.console.print("\n\n[bold green]Teaching Session Complete![/bold green]")
         self.console.print(
             f"[dim]We completed {self.round_number} round(s) on the topic: {self.topic}[/dim]\n"
         )

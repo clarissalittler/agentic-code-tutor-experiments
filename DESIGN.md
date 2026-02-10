@@ -1,10 +1,11 @@
 # Code Tutor - Design Document
 
 ## Overview
-A command-line tool that provides two modes of learning:
+A command-line tool that provides three modes of learning:
 
 1. **Code Review Mode**: Personalized code review by analyzing code files and engaging in interactive dialogue
 2. **Teaching Mode (Teach Me!)**: Socratic learning through correcting intentionally flawed code
+3. **Roguelike**: Generated homework problems on asked-for-topics that can be read and graded later by the tool
 
 ## Core Principles
 1. **Respectful**: Understand and respect the programmer's style and intentions
@@ -18,7 +19,7 @@ A command-line tool that provides two modes of learning:
 ### Technology Stack
 - **Language**: Python 3.9+
 - **CLI Framework**: Click (for argument parsing and interactive prompts)
-- **LLM API**: Anthropic Claude API (for intelligent code analysis)
+- **LLM API**: Pluggable provider interface (Anthropic + OpenAI-compatible backends)
 - **Configuration**: JSON-based config file
 - **File Storage**: `~/.config/code-tutor/` for configuration
 
@@ -26,13 +27,18 @@ A command-line tool that provides two modes of learning:
 
 #### 1. Configuration Manager (`config.py`)
 - Manages user configuration (API key, experience level, preferences)
+- Normalizes loaded config to safe defaults (provider/model/preferences/logging)
+- Exposes typed runtime provider settings via `LLMRuntimeConfig`
+- Enforces explicit consent before unredacted logging is allowed
 - First-time setup wizard
 - Config file location: `~/.config/code-tutor/config.json`
 - Config structure:
   ```json
   {
+    "provider": "anthropic",
     "api_key": "sk-ant-...",
     "model": "claude-sonnet-4-5",
+    "base_url": "",
     "experience_level": "intermediate",
     "preferences": {
       "question_style": "socratic",
@@ -49,10 +55,17 @@ A command-line tool that provides two modes of learning:
 - Provides file metadata (language, size, line count)
 
 #### 3. Code Analyzer (`analyzer.py`)
-- Interfaces with Claude API
+- Interfaces with the configured LLM provider API
+- Uses provider metadata (token usage) for API-call logging
 - Generates context-aware prompts
 - Parses API responses
 - Maintains conversation history for follow-up questions
+
+#### Provider Abstraction (`llm_provider.py`)
+- Defines provider-agnostic `LLMClient` interface
+- Implements Anthropic and OpenAI-compatible backends
+- Normalizes provider aliases and instantiates backend clients
+- Adds retry/backoff for transient OpenAI-compatible HTTP/network failures
 
 #### 4. Interactive Session (`session.py`)
 - Manages the interactive review session
@@ -64,7 +77,7 @@ A command-line tool that provides two modes of learning:
 - Manages Socratic teaching mode (Teach Me!)
 - Generates intentionally flawed code with clever mistakes
 - Collects user's explanation of issues
-- Evaluates understanding using Claude API
+- Evaluates understanding using the configured LLM provider
 - Iteratively refines examples based on user's comprehension
 - Tracks teaching rounds and progression
 
@@ -75,6 +88,7 @@ A command-line tool that provides two modes of learning:
   - `code-tutor review <file>` - Review a single file
   - `code-tutor review <dir>` - Review multiple files
   - `code-tutor teach-me` - Interactive teaching mode
+  - `code-tutor roguelike <subcommand>` - Generate and grade persistent challenge runs
   - `code-tutor config` - Update configuration
   - `code-tutor info` - Show information
 
@@ -83,8 +97,10 @@ A command-line tool that provides two modes of learning:
 #### First-Time Setup
 1. User runs `code-tutor setup`
 2. Tool prompts for:
-   - Anthropic API key
-   - Claude model selection (Sonnet 4.5 or Haiku 4.5)
+   - Provider selection (Anthropic or OpenAI-compatible)
+   - Provider API key
+   - Model selection/input
+   - Optional base URL for OpenAI-compatible providers
    - Experience level (beginner/intermediate/advanced/expert)
    - Question style (socratic/direct/exploratory)
    - Preferred focus areas

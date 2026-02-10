@@ -1,12 +1,12 @@
 # Code Tutor - Agentic Code Tutor Experiments
 
-An intelligent, respectful code review and tutoring CLI tool powered by Claude AI.
+An intelligent, respectful code review and tutoring CLI tool powered by pluggable LLM providers.
 
 This repository is a place to experiment with building command-line and local web interfaces for code tutoring, leveraging LLM-assisted development.
 
 ## Overview
 
-Code Tutor provides two powerful learning modes:
+Code Tutor provides three primary learning modes:
 
 ### 1. Code Review Mode
 Personalized, educational code reviews that respect your programming style and experience level. Unlike traditional linters or code reviewers that simply point out issues, Code Tutor:
@@ -25,6 +25,15 @@ Learn by correcting mistakes through the Socratic method:
 - **Iterative learning** - dig deeper if your explanation needs refinement
 - **Topic-focused** - Choose what you want to learn about
 
+### 3. Roguelike Mode
+Generate persistent homework-style challenge runs and grade them later:
+
+- **Generate runs by topic** with language/type/difficulty controls
+- **Persist to disk** so you can pause and resume across sessions
+- **Reveal hints progressively** when you get stuck
+- **Grade your solution later** with AI review once you're ready
+- **Archive completed runs** to keep your workspace clean
+
 ## Features
 
 - 🤔 **Interactive questioning** - Understands your code before critiquing
@@ -32,8 +41,11 @@ Learn by correcting mistakes through the Socratic method:
 - 🎨 **Style-respecting** - Works with your coding style, not against it
 - 💬 **Conversational** - Ask follow-up questions and dive deeper
 - 🔧 **Configurable** - Set your preferences for question style and focus areas
+- 🔌 **Provider-agnostic** - Works with Anthropic and OpenAI-compatible endpoints
+- ♻️ **Resilient calls** - Retries transient provider/network failures automatically
 - 📁 **Multi-file support** - Review individual files or entire directories
 - 🧑‍🏫 **Teach Me Mode** - Learn by teaching and correcting flawed code
+- 🕹️ **Roguelike Mode** - Persistent challenge runs with delayed grading
 
 ## Installation
 
@@ -51,7 +63,7 @@ pip install -e .
 ### Requirements
 
 - Python 3.9 or higher
-- An Anthropic API key ([get one here](https://console.anthropic.com/settings/keys))
+- An API key for your selected provider (Anthropic, OpenAI-compatible, etc.)
 
 ## Quick Start
 
@@ -64,11 +76,14 @@ code-tutor setup
 ```
 
 You'll be prompted to provide:
-- Your Anthropic API key
-- Your preferred Claude model (Sonnet 4.5 or Haiku 4.5)
+- Your LLM provider (Anthropic or OpenAI-compatible)
+- Your provider API key
+- Your preferred model
+- Optional custom base URL (for OpenAI-compatible endpoints)
 - Your programming experience level (beginner/intermediate/advanced/expert)
 - Your preferred question style (socratic/direct/exploratory)
 - Focus areas for feedback (design, readability, performance, etc.)
+- Logging preferences (unredacted logging requires explicit confirmation)
 
 ### 2. Review Your Code
 
@@ -109,7 +124,35 @@ In this mode:
 
 This Socratic method helps you learn by teaching - one of the most effective ways to master concepts!
 
-### 4. Interactive Review Session
+### 4. Start a Roguelike Run
+
+Generate a challenge run:
+
+```bash
+code-tutor roguelike generate "recursion" --language Python --type implementation
+```
+
+Check your saved runs:
+
+```bash
+code-tutor roguelike list
+```
+
+Read or resume a specific run:
+
+```bash
+code-tutor roguelike show <run-id>
+```
+
+Get graded when ready:
+
+```bash
+code-tutor roguelike grade <run-id>
+```
+
+Legacy alias: `code-tutor exercise ...` maps to the same roguelike commands.
+
+### 5. Interactive Review Session
 
 When you review code, Code Tutor will:
 
@@ -133,9 +176,11 @@ Configuration is stored in `~/.config/code-tutor/config.json`:
 
 ```json
 {
+  "provider": "anthropic",
   "api_key": "your-api-key",
   "api_key_locked": false,
   "model": "claude-sonnet-4-5",
+  "base_url": "",
   "experience_level": "intermediate",
   "preferences": {
     "question_style": "socratic",
@@ -247,9 +292,9 @@ code-tutor review --config-dir /etc/code-tutor myfile.py
 
 ### Available Models
 
-Choose which Claude model to use for code review:
-- **claude-sonnet-4-5** (default): Balanced performance and capability
-- **claude-haiku-4-5**: Fastest and most cost-effective option
+Choose a provider and model:
+- **anthropic**: Uses Claude models (e.g., `claude-sonnet-4-5`)
+- **openai_compatible**: Uses OpenAI-style chat endpoints (e.g., `gpt-4o-mini`)
 
 ### Focus Areas
 
@@ -416,13 +461,17 @@ agentic-code-tutor-experiments/
 ├── src/
 │   └── code_tutor/
 │       ├── __init__.py
-│       ├── cli.py              # Command-line interface
+│       ├── cli.py              # Command-line interface and mode commands
+│       ├── cli_support.py      # Shared CLI setup helpers
+│       ├── modes.py            # Central mode metadata/aliases
 │       ├── config.py           # Configuration management
-│       ├── file_reader.py      # File reading and parsing
-│       ├── analyzer.py         # Code analysis with Claude API
+│       ├── analyzer.py         # Code analysis via provider abstraction
+│       ├── exercise_generator.py
+│       ├── exercise_manager.py
 │       ├── session.py          # Code review session management
-│       └── teaching_session.py # Teaching mode (Teach Me!)
-├── tests/                      # Test files (coming soon)
+│       ├── teaching_session.py # Teach Me mode
+│       └── proof_session.py    # Proof review/teaching mode
+├── tests/                      # Test files
 ├── DESIGN.md                  # Detailed design documentation
 ├── plan.org                   # Project planning and ideas
 ├── pyproject.toml             # Project configuration
@@ -442,7 +491,7 @@ python -m code_tutor.cli review your_file.py
 ### Testing
 
 ```bash
-# Run tests (coming soon)
+# Run tests
 pytest
 
 # Format code
@@ -456,7 +505,7 @@ ruff check src/
 
 1. **File Reading**: Code Tutor reads your source files and extracts metadata (language, size, structure)
 
-2. **Initial Analysis**: Using Claude AI, it performs an initial analysis to understand:
+2. **Initial Analysis**: Using your configured LLM provider, it performs an initial analysis to understand:
    - Overall code structure
    - Potential areas of interest
    - Design patterns used

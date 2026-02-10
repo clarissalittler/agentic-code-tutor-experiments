@@ -1,7 +1,6 @@
 """Exercise management for Code Tutor - working directory for practice exercises."""
 
 import json
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +23,13 @@ class ExerciseManager:
     STATUS_SUBMITTED = "submitted"
     STATUS_REVIEWED = "reviewed"
     STATUS_ARCHIVED = "archived"
+    EXERCISE_STATUSES = [
+        STATUS_PENDING,
+        STATUS_IN_PROGRESS,
+        STATUS_SUBMITTED,
+        STATUS_REVIEWED,
+        STATUS_ARCHIVED,
+    ]
 
     # Exercise types
     TYPE_FILL_IN = "fill_in_blank"
@@ -189,7 +195,13 @@ class ExerciseManager:
 
         # Create README
         readme_content = self._generate_readme(
-            topic, language, exercise_type, difficulty, instructions, learning_objectives
+            exercise_id,
+            topic,
+            language,
+            exercise_type,
+            difficulty,
+            instructions,
+            learning_objectives,
         )
         readme_path = exercise_path / self.README_FILE
         with open(readme_path, "w") as f:
@@ -220,6 +232,7 @@ class ExerciseManager:
 
     def _generate_readme(
         self,
+        exercise_id: str,
         topic: str,
         language: str,
         exercise_type: str,
@@ -230,6 +243,7 @@ class ExerciseManager:
         """Generate README content for an exercise.
 
         Args:
+            exercise_id: Exercise ID (directory name).
             topic: Exercise topic.
             language: Programming language.
             exercise_type: Type of exercise.
@@ -269,7 +283,7 @@ class ExerciseManager:
 1. Open the `starter{self.get_file_extension(language)}` file
 2. Read through the code and comments carefully
 3. Complete the exercise according to the instructions above
-4. When done, run `code-tutor exercise submit {self.exercises_dir.name}/{topic}` to get feedback
+4. When done, run `code-tutor exercise submit {exercise_id}` to get feedback
 
 ## Need Help?
 
