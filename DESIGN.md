@@ -67,6 +67,16 @@ A command-line tool that provides three modes of learning:
 - Normalizes provider aliases and instantiates backend clients
 - Adds retry/backoff for transient OpenAI-compatible HTTP/network failures
 
+#### Prompt Contracts (`contracts.py`)
+- Defines workflow-specific prompt contracts as a single source of truth
+- Co-locates JSON output schema instructions with parser/validation logic
+- Provides resilient parsing fallbacks via shared response parsing helpers
+
+#### Mode Services (`services.py`)
+- Introduces a lightweight service layer for mode orchestration
+- Moves non-trivial orchestration out of Click command handlers
+- Keeps CLI focused on argument handling + user-facing rendering
+
 #### 4. Interactive Session (`session.py`)
 - Manages the interactive review session
 - Handles question-answer flow
@@ -145,12 +155,12 @@ A command-line tool that provides three modes of learning:
 
 ### LLM Prompting Strategy
 
-The system will use a sophisticated prompt that:
+The system uses contract-driven prompts that:
 1. **Sets the tone**: Respectful tutor, not a critic
 2. **Provides context**: User's experience level, preferences
 3. **Includes code**: The actual code being reviewed
 4. **Guides behavior**: Ask before assuming, respect existing patterns
-5. **Structures output**: Separate questions from feedback
+5. **Structures output**: Requires strict JSON output schemas per workflow
 
 Example prompt structure:
 ```

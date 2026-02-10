@@ -43,6 +43,8 @@ Generate persistent homework-style challenge runs and grade them later:
 - 🔧 **Configurable** - Set your preferences for question style and focus areas
 - 🔌 **Provider-agnostic** - Works with Anthropic and OpenAI-compatible endpoints
 - ♻️ **Resilient calls** - Retries transient provider/network failures automatically
+- 📐 **Contract-driven parsing** - Shared JSON prompt contracts with resilient fallback parsing
+- 🧱 **Service-layer orchestration** - Mode orchestration is decoupled from CLI handlers
 - 📁 **Multi-file support** - Review individual files or entire directories
 - 🧑‍🏫 **Teach Me Mode** - Learn by teaching and correcting flawed code
 - 🕹️ **Roguelike Mode** - Persistent challenge runs with delayed grading
@@ -464,8 +466,11 @@ agentic-code-tutor-experiments/
 │       ├── cli.py              # Command-line interface and mode commands
 │       ├── cli_support.py      # Shared CLI setup helpers
 │       ├── modes.py            # Central mode metadata/aliases
+│       ├── contracts.py        # Shared LLM prompt contracts + validators
+│       ├── services.py         # Mode service orchestration layer
 │       ├── config.py           # Configuration management
 │       ├── analyzer.py         # Code analysis via provider abstraction
+│       ├── response_parsing.py # Shared resilient response parsing helpers
 │       ├── exercise_generator.py
 │       ├── exercise_manager.py
 │       ├── session.py          # Code review session management
@@ -500,6 +505,8 @@ black src/
 # Lint code
 ruff check src/
 ```
+
+The test suite includes deterministic fake-LLM integration tests covering all primary modes.
 
 ## How It Works
 
