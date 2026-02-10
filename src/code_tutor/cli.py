@@ -12,16 +12,20 @@ from rich.prompt import Prompt, Confirm
 
 from .config import ConfigManager
 from .cli_support import (
-    end_api_logger,
     ensure_configured,
     get_config_manager_from_context,
     load_config_or_raise,
-    start_api_logger,
 )
 from .logger import SessionLogger
 from .exercise_manager import ExerciseManager
 from .modes import COMMAND_ALIASES, get_all_modes, get_core_modes
 from .proof_reader import ProofReader
+from .services import (
+    ProofModeService,
+    ReviewModeService,
+    RoguelikeModeService,
+    TeachingModeService,
+)
 
 
 console = Console()
@@ -329,19 +333,11 @@ def review(ctx, path: str, recursive: bool):
     """
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
-
-    # Start review session
-    from .session import ReviewSession
-
-    session = ReviewSession(config_manager, console)
-
-    path_obj = Path(path)
-    if path_obj.is_file():
-        session.start_review(path)
-    elif path_obj.is_dir():
-        session.review_directory(path, recursive=recursive)
-    else:
-        raise click.ClickException(f"Invalid path: {path}")
+    service = ReviewModeService(config_manager, console)
+    try:
+        service.review_path(path, recursive=recursive)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command("teach-me")
@@ -355,12 +351,8 @@ def teach_me(ctx):
     """
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
-
-    # Start teaching session
-    from .teaching_session import TeachingSession
-
-    session = TeachingSession(config_manager, console)
-    session.start_session()
+    service = TeachingModeService(config_manager, console)
+    service.start()
 
 
 @main.command()
@@ -618,94 +610,45 @@ def exercise_generate(ctx, topic: str, language: str, exercise_type: str, diffic
     """
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
-
-    runtime = config_manager.get_llm_runtime()
-    api_key = runtime.api_key
-    model = runtime.model
-    provider = runtime.provider
-    base_url = runtime.base_url
+    service = RoguelikeModeService(config_manager)
     experience_level = config_manager.get("experience_level", "intermediate")
-
-    # Use experience level as default difficulty
-    if difficulty is None:
-        difficulty = experience_level
+    resolved_difficulty = difficulty or experience_level
 
     console.print(Panel.fit(
         f"[bold cyan]Generating Exercise[/bold cyan]\n\n"
         f"Topic: {topic}\n"
         f"Language: {language}\n"
         f"Type: {exercise_type}\n"
-        f"Difficulty: {difficulty}",
+        f"Difficulty: {resolved_difficulty}",
         border_style="cyan",
     ))
     console.print()
 
     # Generate the exercise
     console.print("[dim]Generating exercise content...[/dim]")
-
-    api_logger = start_api_logger(
-        config_manager,
-        "exercise_generate",
-        {
-            "topic": topic,
-            "language": language,
-            "exercise_type": exercise_type,
-            "difficulty": difficulty,
-            "model": model,
-        },
-    )
-    log_api_calls = api_logger is not None
-
-    from .exercise_generator import ExerciseGenerator
-
-    generator = ExerciseGenerator(
-        api_key,
-        model,
-        provider=provider,
-        base_url=base_url,
-        logger=api_logger,
-        log_api_calls=log_api_calls,
-    )
     try:
-        exercise_content = generator.generate_exercise(
+        result = service.generate_run(
             topic=topic,
             language=language,
             exercise_type=exercise_type,
-            difficulty=difficulty,
-            experience_level=experience_level,
+            difficulty=resolved_difficulty,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    finally:
-        end_api_logger(api_logger)
 
-    # Create the exercise in the working directory
     console.print("[dim]Creating exercise files...[/dim]")
-
-    manager = ExerciseManager(config_manager=config_manager)
-    exercise_info = manager.create_exercise(
-        topic=topic,
-        language=language,
-        exercise_type=exercise_type,
-        difficulty=difficulty,
-        instructions=exercise_content.instructions,
-        starter_code=exercise_content.starter_code,
-        solution_hints=exercise_content.hints,
-        learning_objectives=exercise_content.learning_objectives,
-        test_code=exercise_content.test_code or None,
-    )
 
     console.print()
     console.print("[green]Exercise created successfully![/green]")
     console.print()
-    console.print(f"[cyan]Location:[/cyan] {exercise_info['path']}")
+    console.print(f"[cyan]Location:[/cyan] {result.exercise_info['path']}")
     console.print()
     console.print("[bold]Next steps:[/bold]")
-    console.print(f"  1. Open the exercise: [cyan]cd {exercise_info['path']}[/cyan]")
+    console.print(f"  1. Open the exercise: [cyan]cd {result.exercise_info['path']}[/cyan]")
     console.print("  2. Read the README.md for instructions")
     console.print("  3. Edit the starter file to complete the exercise")
     console.print(
-        f"  4. Grade your run: [cyan]code-tutor roguelike submit {exercise_info['id']}[/cyan]"
+        f"  4. Grade your run: [cyan]code-tutor roguelike submit {result.exercise_info['id']}[/cyan]"
     )
 
 
@@ -721,9 +664,8 @@ def exercise_list(ctx, status: Optional[str]):
     """List all stored runs in the working directory."""
     config_manager = get_config_manager_from_context(ctx)
     load_config_or_raise(config_manager)
-
-    manager = ExerciseManager(config_manager=config_manager)
-    exercises = manager.list_exercises(status_filter=status)
+    service = RoguelikeModeService(config_manager)
+    exercises = service.list_runs(status_filter=status)
 
     if not exercises:
         console.print("[yellow]No exercises found.[/yellow]")
@@ -736,7 +678,7 @@ def exercise_list(ctx, status: Optional[str]):
 
     console.print(Panel.fit(
         f"[bold cyan]Your Roguelike Runs[/bold cyan]\n"
-        f"[dim]Directory: {manager.exercises_dir}[/dim]",
+        f"[dim]Directory: {service.manager.exercises_dir}[/dim]",
         border_style="cyan",
     ))
     console.print()
@@ -778,9 +720,8 @@ def exercise_show(ctx, exercise_path: str, show_readme: bool):
     """
     config_manager = get_config_manager_from_context(ctx)
     load_config_or_raise(config_manager)
-
-    manager = ExerciseManager(config_manager=config_manager)
-    exercise = manager.get_exercise(exercise_path)
+    service = RoguelikeModeService(config_manager)
+    exercise = service.get_run(exercise_path)
 
     if not exercise:
         raise click.ClickException(f"Exercise not found: {exercise_path}")
@@ -823,20 +764,11 @@ def _grade_run_submission(ctx: click.Context, exercise_path: str) -> None:
     """Shared implementation for grading commands."""
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
-
-    manager = ExerciseManager(config_manager=config_manager)
-    exercise = manager.get_exercise(exercise_path)
+    service = RoguelikeModeService(config_manager)
+    exercise = service.get_run(exercise_path)
 
     if not exercise:
         raise click.ClickException(f"Exercise not found: {exercise_path}")
-
-    # Read the submitted code
-    starter_file = exercise.get("starter_file")
-    if not starter_file:
-        raise click.ClickException("Could not find starter file in exercise.")
-
-    with open(starter_file, "r", encoding="utf-8") as f:
-        submitted_code = f.read()
 
     console.print(Panel.fit(
         f"[bold cyan]Reviewing Submission[/bold cyan]\n\n"
@@ -847,57 +779,15 @@ def _grade_run_submission(ctx: click.Context, exercise_path: str) -> None:
     console.print()
     console.print("[dim]Analyzing your solution...[/dim]")
     console.print()
-
-    # Review the submission
-    runtime = config_manager.get_llm_runtime()
-    api_key = runtime.api_key
-    model = runtime.model
-    provider = runtime.provider
-    base_url = runtime.base_url
-    experience_level = config_manager.get("experience_level", "intermediate")
-
-    manager.update_status(exercise_path, ExerciseManager.STATUS_SUBMITTED)
-
-    api_logger = start_api_logger(
-        config_manager,
-        "exercise_submit",
-        {
-            "exercise_id": exercise.get("id"),
-            "topic": exercise["metadata"].get("topic"),
-            "exercise_type": exercise["metadata"].get("exercise_type"),
-            "model": model,
-        },
-    )
-    log_api_calls = api_logger is not None
-
-    from .exercise_generator import ExerciseGenerator
-
-    generator = ExerciseGenerator(
-        api_key,
-        model,
-        provider=provider,
-        base_url=base_url,
-        logger=api_logger,
-        log_api_calls=log_api_calls,
-    )
     try:
-        review = generator.review_submission(
-            original_exercise=exercise["metadata"],
-            submitted_code=submitted_code,
-            language=exercise["metadata"].get("language", "Python"),
-            experience_level=experience_level,
-        )
+        result = service.review_run_submission(exercise_path)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    finally:
-        end_api_logger(api_logger)
 
     # Display the review
-    md = Markdown(review.feedback)
+    md = Markdown(result.review.feedback)
     console.print(Panel(md, border_style="green", title="Review Feedback"))
 
-    # Update status
-    manager.update_status(exercise_path, ExerciseManager.STATUS_REVIEWED)
     console.print()
     console.print("[green]Exercise marked as reviewed.[/green]")
 
@@ -933,16 +823,13 @@ def exercise_hint(ctx, exercise_path: str):
     """
     config_manager = get_config_manager_from_context(ctx)
     load_config_or_raise(config_manager)
+    service = RoguelikeModeService(config_manager)
+    try:
+        hint_data = service.reveal_next_hint(exercise_path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    manager = ExerciseManager(config_manager=config_manager)
-    exercise = manager.get_exercise(exercise_path)
-
-    if not exercise:
-        raise click.ClickException(f"Exercise not found: {exercise_path}")
-
-    metadata = exercise["metadata"]
-    hints = metadata.get("solution_hints", [])
-    revealed = metadata.get("hints_revealed", 0)
+    metadata = hint_data["metadata"]
 
     console.print(Panel.fit(
         f"[bold cyan]Hint for: {metadata.get('topic', 'Unknown')}[/bold cyan]",
@@ -950,15 +837,17 @@ def exercise_hint(ctx, exercise_path: str):
     ))
     console.print()
 
-    hint = manager.get_next_hint(exercise_path)
+    hint = hint_data["hint"]
 
     if hint:
-        console.print(f"[yellow]Hint {revealed + 1}/{len(hints)}:[/yellow]")
+        console.print(
+            f"[yellow]Hint {hint_data['revealed_index']}/{hint_data['total_hints']}:[/yellow]"
+        )
         console.print()
         console.print(f"  {hint}")
         console.print()
 
-        remaining = len(hints) - (revealed + 1)
+        remaining = hint_data["remaining_hints"]
         if remaining > 0:
             console.print(f"[dim]{remaining} more hint(s) available.[/dim]")
         else:
@@ -970,11 +859,6 @@ def exercise_hint(ctx, exercise_path: str):
         console.print("  - Re-reading the README.md instructions")
         console.print("  - Breaking the problem into smaller parts")
         console.print("  - Searching for similar examples online")
-
-    # Update status to in_progress if it was pending
-    if metadata.get("status") == ExerciseManager.STATUS_PENDING:
-        manager.update_status(exercise_path, ExerciseManager.STATUS_IN_PROGRESS)
-
 
 @roguelike.command("archive")
 @click.argument("exercise_path")
@@ -989,9 +873,8 @@ def exercise_archive(ctx, exercise_path: str, force: bool):
     """
     config_manager = get_config_manager_from_context(ctx)
     load_config_or_raise(config_manager)
-
-    manager = ExerciseManager(config_manager=config_manager)
-    exercise = manager.get_exercise(exercise_path)
+    service = RoguelikeModeService(config_manager)
+    exercise = service.get_run(exercise_path)
 
     if not exercise:
         raise click.ClickException(f"Exercise not found: {exercise_path}")
@@ -1001,7 +884,7 @@ def exercise_archive(ctx, exercise_path: str, force: bool):
             console.print("[yellow]Cancelled.[/yellow]")
             return
 
-    if manager.archive_exercise(exercise_path):
+    if service.archive_run(exercise_path):
         console.print("[green]Exercise archived successfully.[/green]")
     else:
         raise click.ClickException("Failed to archive exercise.")
@@ -1046,20 +929,16 @@ def proof_review(ctx, file_path: str, domain: Optional[str], level: Optional[str
     """
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
+    service = ProofModeService(config_manager, console)
 
     # Check if file type is supported
-    reader = ProofReader()
-    if not reader.is_supported(file_path):
-        supported_formats = ", ".join(reader.SUPPORTED_EXTENSIONS.keys())
+    if not service.is_supported_file(file_path):
+        supported_formats = ", ".join(service.supported_formats().keys())
         raise click.ClickException(
             f"Unsupported file type.\nSupported formats: {supported_formats}"
         )
 
-    # Start proof review session
-    from .proof_session import ProofSession
-
-    session = ProofSession(config_manager, console)
-    session.start_review(file_path, domain=domain, experience_level=level)
+    service.review_file(file_path, domain=domain, experience_level=level)
 
 
 @proof.command("teach")
@@ -1082,12 +961,8 @@ def proof_teach(ctx, domain: Optional[str]):
     """
     config_manager = get_config_manager_from_context(ctx)
     ensure_configured(config_manager)
-
-    # Start proof teaching session
-    from .proof_session import ProofTeachingSession
-
-    session = ProofTeachingSession(config_manager, console)
-    session.start_session(domain=domain)
+    service = ProofModeService(config_manager, console)
+    service.start_teaching(domain=domain)
 
 
 @proof.command("info")
