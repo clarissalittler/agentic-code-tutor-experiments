@@ -1,6 +1,6 @@
 """Interactive code review session management."""
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -10,6 +10,7 @@ from .analyzer import CodeAnalyzer
 from .config import ConfigManager
 from .file_reader import FileReader
 from .logger import SessionLogger
+from .session_runtime import build_session_runtime
 
 
 class ReviewSession:
@@ -26,14 +27,8 @@ class ReviewSession:
         self.console = console or Console()
         self.file_reader = FileReader()
         self.analyzer: Optional[CodeAnalyzer] = None
-
-        # Initialize logger if enabled
+        self.log_api_calls = False
         self.logger: Optional[SessionLogger] = None
-        if self.config.is_logging_enabled():
-            self.logger = SessionLogger(
-                config_dir=self.config.config_dir,
-                enabled=True
-            )
 
     def start_review(self, file_path: str) -> None:
         """Start an interactive code review session.
@@ -42,12 +37,15 @@ class ReviewSession:
             file_path: Path to the file to review.
         """
         try:
-            # Load configuration
-            config = self.config.load()
-            api_key = self.config.get_api_key()
-            model = self.config.get_model()
-            experience_level = self.config.get("experience_level", "intermediate")
-            preferences = self.config.get("preferences", {})
+            runtime = build_session_runtime(self.config, reload_config=True)
+            self.logger = runtime.logger
+            self.log_api_calls = runtime.log_api_calls
+            api_key = runtime.llm.api_key
+            model = runtime.llm.model
+            provider = runtime.llm.provider
+            base_url = runtime.llm.base_url
+            experience_level = runtime.experience_level
+            preferences = runtime.preferences
 
             # Initialize logger and start session
             if self.logger:
@@ -55,11 +53,19 @@ class ReviewSession:
                     "file_path": file_path,
                     "experience_level": experience_level,
                     "preferences": preferences,
+                    "provider": provider,
                     "model": model,
                 })
 
             # Initialize analyzer
-            self.analyzer = CodeAnalyzer(api_key, model)
+            self.analyzer = CodeAnalyzer(
+                api_key,
+                model,
+                provider=provider,
+                base_url=base_url,
+                logger=self.logger,
+                log_api_calls=self.log_api_calls,
+            )
 
             # Read the file
             self.console.print(f"\n[cyan]Reading file:[/cyan] {file_path}")
@@ -90,18 +96,18 @@ class ReviewSession:
                 )
 
             # Display initial observations
-            if analysis.get("observations"):
-                self._display_observations(analysis["observations"])
+            if analysis.observations:
+                self._display_observations(analysis.observations)
                 # Log observations
                 if self.logger and self.config.should_log_interactions():
                     self.logger.log_ai_response(
                         "observations",
-                        "\n".join(analysis["observations"]),
+                        "\n".join(analysis.observations),
                         {"file_path": file_path}
                     )
 
             # Ask questions
-            questions = analysis.get("questions", [])
+            questions = analysis.questions
             if questions:
                 answers = self._ask_questions(questions)
 
@@ -111,7 +117,7 @@ class ReviewSession:
                     answers, experience_level, preferences
                 )
 
-                self._display_feedback(feedback_data["feedback"])
+                self._display_feedback(feedback_data.feedback)
 
                 # Offer follow-up conversation
                 self._follow_up_conversation()

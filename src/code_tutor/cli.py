@@ -6,17 +6,22 @@ from typing import Optional
 
 import click
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
 from .config import ConfigManager
-from .session import ReviewSession
-from .teaching_session import TeachingSession
+from .cli_support import (
+    end_api_logger,
+    ensure_configured,
+    get_config_manager_from_context,
+    load_config_or_raise,
+    start_api_logger,
+)
 from .logger import SessionLogger
 from .exercise_manager import ExerciseManager
-from .exercise_generator import ExerciseGenerator
+from .modes import COMMAND_ALIASES, get_all_modes, get_core_modes
 from .proof_reader import ProofReader
-from .proof_session import ProofSession, ProofTeachingSession
 
 
 console = Console()
@@ -45,7 +50,6 @@ def main(ctx, config_dir: Optional[str]):
 @click.pass_context
 def setup(ctx):
     """Initial setup: configure API key and preferences."""
-    config_dir = ctx.obj.get("config_dir")
     console.print(Panel.fit(
         "[bold cyan]Welcome to Code Tutor![/bold cyan]\n\n"
         "Let's set up your configuration.",
@@ -53,7 +57,7 @@ def setup(ctx):
     ))
     console.print()
 
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
 
     # Load existing config or start fresh
     try:
@@ -78,6 +82,31 @@ def setup(ctx):
     except Exception:
         existing_config = config_manager.DEFAULT_CONFIG.copy()
 
+    # Get provider preference (skip if API key is locked)
+    if config_manager.is_api_key_locked():
+        provider = existing_config.get("provider", "anthropic")
+        console.print("[bold]Step 1: LLM Provider[/bold]")
+        console.print(
+            f"[yellow]Provider is locked with API key settings: {provider}[/yellow]\n"
+        )
+    else:
+        existing_provider = existing_config.get("provider", "anthropic")
+        provider_default_choice = "1"
+        if existing_provider in {"openai", "openai_compatible", "openai-compat"}:
+            provider_default_choice = "2"
+
+        console.print("[bold]Step 1: LLM Provider[/bold]")
+        console.print("[dim]Choose the backend used for AI responses.[/dim]\n")
+        console.print("  1. anthropic         - Claude Messages API")
+        console.print("  2. openai_compatible - OpenAI-style Chat Completions API\n")
+
+        provider_choice = Prompt.ask(
+            "Choose your provider",
+            choices=["1", "2"],
+            default=provider_default_choice,
+        )
+        provider = "anthropic" if provider_choice == "1" else "openai_compatible"
+
     # Get API key (skip if locked)
     if config_manager.is_api_key_locked():
         api_key = existing_config.get("api_key", "")
@@ -87,13 +116,18 @@ def setup(ctx):
                 "Please contact your administrator to set up the API key."
             )
             return
-        console.print("[bold]Step 1: Anthropic API Key[/bold]")
+        console.print("[bold]Step 2: API Key[/bold]")
         console.print("[yellow]API key is locked and cannot be changed.[/yellow]\n")
     else:
-        console.print("[bold]Step 1: Anthropic API Key[/bold]")
-        console.print(
-            "[dim]Get your API key from: https://console.anthropic.com/settings/keys[/dim]\n"
-        )
+        console.print("[bold]Step 2: API Key[/bold]")
+        if provider == "anthropic":
+            console.print(
+                "[dim]Get your API key from: https://console.anthropic.com/settings/keys[/dim]\n"
+            )
+        else:
+            console.print(
+                "[dim]For OpenAI-compatible APIs, provide the provider key (e.g. OPENAI_API_KEY).[/dim]\n"
+            )
 
         current_key = existing_config.get("api_key", "")
         if current_key:
@@ -112,22 +146,52 @@ def setup(ctx):
             return
 
     # Get model preference
-    console.print("\n[bold]Step 2: Claude Model[/bold]")
-    console.print("[dim]Choose which Claude model to use for code review.[/dim]\n")
+    console.print("\n[bold]Step 3: Model[/bold]")
+    if provider == "anthropic":
+        console.print("[dim]Choose which Claude model to use.[/dim]\n")
+        console.print("  1. claude-opus-4-5   - Most capable, best for complex analysis")
+        console.print("  2. claude-sonnet-4-5 - Balanced performance and capability (Recommended)")
+        console.print("  3. claude-haiku-4-5  - Fastest and most cost-effective\n")
 
-    console.print("  1. claude-opus-4-5   - Most capable, best for complex analysis")
-    console.print("  2. claude-sonnet-4-5 - Balanced performance and capability (Recommended)")
-    console.print("  3. claude-haiku-4-5  - Fastest and most cost-effective\n")
+        default_model_choice = "2"
+        existing_model = existing_config.get("model")
+        if existing_model in ConfigManager.AVAILABLE_MODELS:
+            default_model_choice = str(ConfigManager.AVAILABLE_MODELS.index(existing_model) + 1)
 
-    model_choice = Prompt.ask(
-        "Choose your model",
-        choices=["1", "2", "3"],
-        default="2",
-    )
-    model = ConfigManager.AVAILABLE_MODELS[int(model_choice) - 1]
+        model_choice = Prompt.ask(
+            "Choose your model",
+            choices=["1", "2", "3"],
+            default=default_model_choice,
+        )
+        model = ConfigManager.AVAILABLE_MODELS[int(model_choice) - 1]
+    else:
+        console.print(
+            "[dim]Enter an OpenAI-compatible model id (for example: gpt-4o-mini, llama3.1).[/dim]\n"
+        )
+        default_model = (
+            existing_config.get("model")
+            if existing_config.get("provider") in {"openai", "openai_compatible"}
+            else ConfigManager.DEFAULT_MODELS["openai_compatible"]
+        )
+        model = Prompt.ask("Model", default=default_model).strip()
+        if not model:
+            console.print("[red]Model is required. Setup cancelled.[/red]")
+            return
+
+    # Optional base URL for openai-compatible backends
+    if provider == "openai_compatible":
+        console.print("\n[bold]Step 4: API Base URL[/bold]")
+        console.print(
+            "[dim]Use the default for OpenAI, or a custom endpoint for compatible providers.[/dim]\n"
+        )
+        existing_base_url = existing_config.get("base_url", "")
+        base_url_default = existing_base_url or "https://api.openai.com/v1"
+        base_url = Prompt.ask("Base URL", default=base_url_default).strip()
+    else:
+        base_url = ""
 
     # Get experience level
-    console.print("\n[bold]Step 3: Your Programming Experience[/bold]")
+    console.print("\n[bold]Step 5: Your Programming Experience[/bold]")
     console.print("[dim]This helps tailor feedback to your skill level.[/dim]\n")
 
     for i, level in enumerate(ConfigManager.EXPERIENCE_LEVELS, 1):
@@ -141,7 +205,7 @@ def setup(ctx):
     experience_level = ConfigManager.EXPERIENCE_LEVELS[int(experience_choice) - 1]
 
     # Get question style
-    console.print("\n[bold]Step 4: Preferred Question Style[/bold]")
+    console.print("\n[bold]Step 6: Preferred Question Style[/bold]")
     console.print("[dim]How would you like me to interact with you?[/dim]\n")
 
     console.print("  1. Socratic - Guide you to discover insights through questions")
@@ -156,7 +220,7 @@ def setup(ctx):
     question_style = ConfigManager.QUESTION_STYLES[int(style_choice) - 1]
 
     # Get focus areas
-    console.print("\n[bold]Step 5: Focus Areas[/bold]")
+    console.print("\n[bold]Step 7: Focus Areas[/bold]")
     console.print("[dim]What aspects of code are most important to you?[/dim]")
     console.print("[dim]Enter numbers separated by commas (e.g., 1,2,4)[/dim]\n")
 
@@ -182,17 +246,48 @@ def setup(ctx):
         focus_areas = ["design", "readability"]
 
     # Get logging preferences
-    console.print("\n[bold]Step 6: Logging Preferences[/bold]")
+    console.print("\n[bold]Step 8: Logging Preferences[/bold]")
     console.print("[dim]Enable logging to record student interactions for debugging.[/dim]")
+    console.print("[dim]Logs may include your code and inputs on disk.[/dim]")
     console.print("[dim]Logs can be exported with 'code-tutor export-logs'[/dim]\n")
 
     enable_logging = Confirm.ask("Enable interaction logging?", default=False)
+    redact_content = True
+    log_api_calls = False
+    allow_unredacted = False
+    if enable_logging:
+        redact_content = Confirm.ask(
+            "Redact code and inputs in logs? (recommended)",
+            default=True,
+        )
+        if not redact_content:
+            console.print(
+                "[yellow]Warning:[/yellow] Unredacted logs may contain sensitive code and prompts."
+            )
+            allow_unredacted = Confirm.ask(
+                "I understand the risk and want to allow unredacted logging",
+                default=False,
+            )
+            if not allow_unredacted:
+                console.print(
+                    "[yellow]Keeping redaction enabled because explicit consent was not provided.[/yellow]"
+                )
+                redact_content = True
+        log_api_calls = Confirm.ask(
+            "Log API prompts and responses?",
+            default=False,
+        )
+
+    if not config_manager.validate_provider(provider):
+        provider = "anthropic"
 
     # Save configuration
     new_config = {
+        "provider": provider,
         "api_key": api_key.strip(),
         "api_key_locked": existing_config.get("api_key_locked", False),  # Preserve lock status
         "model": model,
+        "base_url": base_url,
         "experience_level": experience_level,
         "preferences": {
             "question_style": question_style,
@@ -202,7 +297,9 @@ def setup(ctx):
         "logging": {
             "enabled": enable_logging,
             "log_interactions": True,
-            "log_api_calls": False,
+            "log_api_calls": log_api_calls,
+            "redact_content": redact_content,
+            "allow_unredacted": allow_unredacted and not redact_content,
         },
     }
 
@@ -230,23 +327,12 @@ def review(ctx, path: str, recursive: bool):
 
     PATH: Path to the file or directory to review
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
-
-    # Check if configured
-    try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Error loading configuration:[/red] {e}")
-        sys.exit(1)
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
 
     # Start review session
+    from .session import ReviewSession
+
     session = ReviewSession(config_manager, console)
 
     path_obj = Path(path)
@@ -255,8 +341,7 @@ def review(ctx, path: str, recursive: bool):
     elif path_obj.is_dir():
         session.review_directory(path, recursive=recursive)
     else:
-        console.print(f"[red]Error:[/red] Invalid path: {path}")
-        sys.exit(1)
+        raise click.ClickException(f"Invalid path: {path}")
 
 
 @main.command("teach-me")
@@ -268,23 +353,12 @@ def teach_me(ctx):
     to identify and explain what's wrong. This Socratic method helps you
     learn by teaching and correcting mistakes.
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
-
-    # Check if configured
-    try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Error loading configuration:[/red] {e}")
-        sys.exit(1)
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
 
     # Start teaching session
+    from .teaching_session import TeachingSession
+
     session = TeachingSession(config_manager, console)
     session.start_session()
 
@@ -293,11 +367,10 @@ def teach_me(ctx):
 @click.pass_context
 def config(ctx):
     """View or update configuration."""
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
 
     try:
-        config_data = config_manager.load()
+        config_data = load_config_or_raise(config_manager)
 
         console.print(Panel.fit(
             "[bold]Current Configuration[/bold]",
@@ -326,9 +399,12 @@ def config(ctx):
                 "[yellow]Note: API key is locked for multi-student deployment.[/yellow]"
             )
 
-        console.print(
-            f"[cyan]Model:[/cyan] {config_data.get('model', 'claude-sonnet-4-5')}"
-        )
+        provider = config_manager.get_provider()
+        console.print(f"[cyan]Provider:[/cyan] {provider}")
+        console.print(f"[cyan]Model:[/cyan] {config_manager.get_model()}")
+        base_url = config_manager.get_base_url() or ""
+        if base_url:
+            console.print(f"[cyan]Base URL:[/cyan] {base_url}")
         console.print(
             f"[cyan]Experience level:[/cyan] {config_data.get('experience_level', 'Not set')}"
         )
@@ -345,6 +421,17 @@ def config(ctx):
         console.print(
             f"[cyan]Logging:[/cyan] {'[green]Enabled[/green]' if logging_enabled else '[red]Disabled[/red]'}"
         )
+        if logging_enabled:
+            redact_logs = bool(logging_config.get("redact_content", True))
+            if redact_logs:
+                console.print("[cyan]Log redaction:[/cyan] [green]Enabled[/green]")
+            else:
+                consented = bool(logging_config.get("allow_unredacted", False))
+                status = "[green]Confirmed[/green]" if consented else "[red]Missing[/red]"
+                console.print(
+                    f"[cyan]Log redaction:[/cyan] [yellow]Disabled[/yellow] "
+                    f"(consent: {status})"
+                )
 
         console.print()
 
@@ -357,33 +444,57 @@ def config(ctx):
             # Re-run setup using Click's context
             ctx.invoke(setup)
 
+    except click.ClickException:
+        raise
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
+        raise click.ClickException(str(e)) from e
 
 
 @main.command()
 def info():
     """Show information about Code Tutor."""
+    core_modes_data = get_core_modes()
+    core_commands = {mode.command for mode in core_modes_data}
+    core_modes = "\n".join(
+        f"• {mode.title} (`{mode.command}`) - {mode.summary}"
+        for mode in core_modes_data
+    )
+    extra_modes = "\n".join(
+        f"• {mode.title} (`{mode.command}`) - {mode.summary}"
+        for mode in get_all_modes()
+        if mode.command not in core_commands
+    )
+    aliases = "\n".join(
+        f"• {alias} -> {target}"
+        for alias, target in sorted(COMMAND_ALIASES.items())
+    )
+
     console.print(Panel.fit(
         "[bold cyan]Code Tutor v0.1.0[/bold cyan]\n\n"
         "An intelligent, respectful code review and tutoring CLI tool.\n\n"
+        "[bold]Core Modes:[/bold]\n"
+        f"{core_modes}\n\n"
+        "[bold]Extended Modes:[/bold]\n"
+        f"{extra_modes}\n\n"
         "[bold]Features:[/bold]\n"
         "• Personalized feedback based on your experience level\n"
         "• Interactive dialogue about your code decisions\n"
         "• Respectful of your programming style and intentions\n"
-        "• Practice exercises with working directory\n"
+        "• Persistent homework-style exercise runs\n"
         "• Mathematical proof review and teaching\n"
-        "• Powered by Claude AI\n\n"
+        "• Powered by pluggable LLM providers\n\n"
         "[bold]Commands:[/bold]\n"
         "• setup         - Configure your API key and preferences\n"
         "• review        - Review a file or directory\n"
         "• teach-me      - Learn by correcting intentionally flawed code\n"
-        "• exercise      - Generate and manage coding exercises\n"
+        "• roguelike     - Generate and manage homework-style challenge runs\n"
+        "• exercise      - Backwards-compatible alias for `roguelike`\n"
         "• proof         - Review mathematical proofs\n"
         "• config        - View/update configuration\n"
         "• export-logs   - Export interaction logs for debugging\n"
         "• info          - Show this information\n\n"
+        "[bold]Command Aliases:[/bold]\n"
+        f"{aliases}\n\n"
         "[bold]Learn more:[/bold]\n"
         "https://github.com/yourusername/code-tutor",
         border_style="cyan",
@@ -414,11 +525,10 @@ def export_logs(ctx, output: Optional[str], clear: bool):
     Logs are only created if logging is enabled in the configuration.
     Use 'code-tutor setup' to enable logging.
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
 
     try:
-        config_manager.load()
+        load_config_or_raise(config_manager)
 
         # Check if logging is enabled
         if not config_manager.is_logging_enabled():
@@ -430,7 +540,8 @@ def export_logs(ctx, output: Optional[str], clear: bool):
                 '  "logging": {\n'
                 '    "enabled": true,\n'
                 '    "log_interactions": true,\n'
-                '    "log_api_calls": false\n'
+                '    "log_api_calls": false,\n'
+                '    "redact_content": true\n'
                 '  }\n'
             )
 
@@ -441,11 +552,11 @@ def export_logs(ctx, output: Optional[str], clear: bool):
         console.print("\n[cyan]Exporting logs...[/cyan]\n")
 
         output_path = SessionLogger.export_all_logs(
-            config_dir=config_manager.config_dir if config_dir else None,
+            config_dir=config_manager.config_dir,
             output_path=Path(output) if output else None
         )
 
-        console.print(f"[green]✓ Logs exported successfully![/green]")
+        console.print("[green]✓ Logs exported successfully![/green]")
         console.print(f"[cyan]Output file:[/cyan] {output_path}")
 
         # Show summary
@@ -458,28 +569,29 @@ def export_logs(ctx, output: Optional[str], clear: bool):
         # Clear logs if requested
         if clear:
             if Confirm.ask("\n[yellow]Are you sure you want to clear all log files?[/yellow]", default=False):
-                count = SessionLogger.clear_logs(config_manager.config_dir if config_dir else None)
+                count = SessionLogger.clear_logs(config_manager.config_dir)
                 console.print(f"[green]✓ Cleared {count} log file(s)[/green]")
 
         console.print("\n[dim]You can now send this file to your instructor or developer for debugging.[/dim]")
 
+    except click.ClickException:
+        raise
     except Exception as e:
-        console.print(f"[red]Error exporting logs:[/red] {e}")
-        sys.exit(1)
+        raise click.ClickException(f"Error exporting logs: {e}") from e
 
 
 @main.group()
 @click.pass_context
-def exercise(ctx):
-    """Manage coding exercises in your working directory.
+def roguelike(ctx):
+    """Manage roguelike homework runs in your working directory.
 
-    Generate, list, and submit exercises for practice and review.
-    Exercises are stored in ~/code-tutor-exercises/ by default.
+    Generate, inspect, and grade challenge runs over time.
+    Runs are stored in ~/code-tutor-exercises/ by default.
     """
     pass
 
 
-@exercise.command("generate")
+@roguelike.command("generate")
 @click.argument("topic")
 @click.option(
     "--language", "-l",
@@ -488,9 +600,7 @@ def exercise(ctx):
 )
 @click.option(
     "--type", "-t", "exercise_type",
-    type=click.Choice([
-        "fill_in_blank", "bug_fix", "implementation", "refactoring", "test_writing"
-    ]),
+    type=click.Choice(ExerciseManager.EXERCISE_TYPES),
     default="implementation",
     help="Type of exercise to generate",
 )
@@ -502,44 +612,61 @@ def exercise(ctx):
 )
 @click.pass_context
 def exercise_generate(ctx, topic: str, language: str, exercise_type: str, difficulty: Optional[str]):
-    """Generate a new exercise on a topic.
+    """Generate a new roguelike run on a topic.
 
     TOPIC: The concept or skill to practice (e.g., "binary search", "recursion")
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
 
+    runtime = config_manager.get_llm_runtime()
+    api_key = runtime.api_key
+    model = runtime.model
+    provider = runtime.provider
+    base_url = runtime.base_url
+    experience_level = config_manager.get("experience_level", "intermediate")
+
+    # Use experience level as default difficulty
+    if difficulty is None:
+        difficulty = experience_level
+
+    console.print(Panel.fit(
+        f"[bold cyan]Generating Exercise[/bold cyan]\n\n"
+        f"Topic: {topic}\n"
+        f"Language: {language}\n"
+        f"Type: {exercise_type}\n"
+        f"Difficulty: {difficulty}",
+        border_style="cyan",
+    ))
+    console.print()
+
+    # Generate the exercise
+    console.print("[dim]Generating exercise content...[/dim]")
+
+    api_logger = start_api_logger(
+        config_manager,
+        "exercise_generate",
+        {
+            "topic": topic,
+            "language": language,
+            "exercise_type": exercise_type,
+            "difficulty": difficulty,
+            "model": model,
+        },
+    )
+    log_api_calls = api_logger is not None
+
+    from .exercise_generator import ExerciseGenerator
+
+    generator = ExerciseGenerator(
+        api_key,
+        model,
+        provider=provider,
+        base_url=base_url,
+        logger=api_logger,
+        log_api_calls=log_api_calls,
+    )
     try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
-
-        api_key = config_manager.get_api_key()
-        model = config_manager.get_model()
-        experience_level = config_manager.get("experience_level", "intermediate")
-
-        # Use experience level as default difficulty
-        if difficulty is None:
-            difficulty = experience_level
-
-        console.print(Panel.fit(
-            f"[bold cyan]Generating Exercise[/bold cyan]\n\n"
-            f"Topic: {topic}\n"
-            f"Language: {language}\n"
-            f"Type: {exercise_type}\n"
-            f"Difficulty: {difficulty}",
-            border_style="cyan",
-        ))
-        console.print()
-
-        # Generate the exercise
-        console.print("[dim]Generating exercise content...[/dim]")
-
-        generator = ExerciseGenerator(api_key, model)
         exercise_content = generator.generate_exercise(
             topic=topic,
             language=language,
@@ -547,55 +674,53 @@ def exercise_generate(ctx, topic: str, language: str, exercise_type: str, diffic
             difficulty=difficulty,
             experience_level=experience_level,
         )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        end_api_logger(api_logger)
 
-        # Create the exercise in the working directory
-        console.print("[dim]Creating exercise files...[/dim]")
+    # Create the exercise in the working directory
+    console.print("[dim]Creating exercise files...[/dim]")
 
-        manager = ExerciseManager(config_manager=config_manager)
-        exercise_info = manager.create_exercise(
-            topic=topic,
-            language=language,
-            exercise_type=exercise_type,
-            difficulty=difficulty,
-            instructions=exercise_content.get("instructions", ""),
-            starter_code=exercise_content.get("starter_code", ""),
-            solution_hints=exercise_content.get("hints", []),
-            learning_objectives=exercise_content.get("learning_objectives", []),
-            test_code=exercise_content.get("test_code", None),
-        )
+    manager = ExerciseManager(config_manager=config_manager)
+    exercise_info = manager.create_exercise(
+        topic=topic,
+        language=language,
+        exercise_type=exercise_type,
+        difficulty=difficulty,
+        instructions=exercise_content.instructions,
+        starter_code=exercise_content.starter_code,
+        solution_hints=exercise_content.hints,
+        learning_objectives=exercise_content.learning_objectives,
+        test_code=exercise_content.test_code or None,
+    )
 
-        console.print()
-        console.print(f"[green]Exercise created successfully![/green]")
-        console.print()
-        console.print(f"[cyan]Location:[/cyan] {exercise_info['path']}")
-        console.print()
-        console.print("[bold]Next steps:[/bold]")
-        console.print(f"  1. Open the exercise: [cyan]cd {exercise_info['path']}[/cyan]")
-        console.print(f"  2. Read the README.md for instructions")
-        console.print(f"  3. Edit the starter file to complete the exercise")
-        console.print(f"  4. Submit for review: [cyan]code-tutor exercise submit {exercise_info['id']}[/cyan]")
-
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error:[/red] {e}")
-        sys.exit(1)
+    console.print()
+    console.print("[green]Exercise created successfully![/green]")
+    console.print()
+    console.print(f"[cyan]Location:[/cyan] {exercise_info['path']}")
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print(f"  1. Open the exercise: [cyan]cd {exercise_info['path']}[/cyan]")
+    console.print("  2. Read the README.md for instructions")
+    console.print("  3. Edit the starter file to complete the exercise")
+    console.print(
+        f"  4. Grade your run: [cyan]code-tutor roguelike submit {exercise_info['id']}[/cyan]"
+    )
 
 
-@exercise.command("list")
+@roguelike.command("list")
 @click.option(
     "--status", "-s",
-    type=click.Choice(["pending", "in_progress", "submitted", "reviewed", "archived"]),
+    type=click.Choice(ExerciseManager.EXERCISE_STATUSES),
     default=None,
     help="Filter by status",
 )
 @click.pass_context
 def exercise_list(ctx, status: Optional[str]):
-    """List all exercises in the working directory."""
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
-    config_manager.load()
+    """List all stored runs in the working directory."""
+    config_manager = get_config_manager_from_context(ctx)
+    load_config_or_raise(config_manager)
 
     manager = ExerciseManager(config_manager=config_manager)
     exercises = manager.list_exercises(status_filter=status)
@@ -605,12 +730,12 @@ def exercise_list(ctx, status: Optional[str]):
         if status:
             console.print(f"[dim]Filtered by status: {status}[/dim]")
         console.print()
-        console.print("Generate a new exercise with:")
-        console.print("  [cyan]code-tutor exercise generate \"topic\"[/cyan]")
+        console.print("Generate a new run with:")
+        console.print("  [cyan]code-tutor roguelike generate \"topic\"[/cyan]")
         return
 
     console.print(Panel.fit(
-        f"[bold cyan]Your Exercises[/bold cyan]\n"
+        f"[bold cyan]Your Roguelike Runs[/bold cyan]\n"
         f"[dim]Directory: {manager.exercises_dir}[/dim]",
         border_style="cyan",
     ))
@@ -638,103 +763,182 @@ def exercise_list(ctx, status: Optional[str]):
         console.print()
 
 
-@exercise.command("submit")
+@roguelike.command("show")
 @click.argument("exercise_path")
+@click.option(
+    "--show-readme/--no-readme",
+    default=True,
+    help="Display README content inline",
+)
 @click.pass_context
-def exercise_submit(ctx, exercise_path: str):
-    """Submit an exercise for review.
+def exercise_show(ctx, exercise_path: str, show_readme: bool):
+    """Show details for a stored run so you can resume it later.
 
-    EXERCISE_PATH: Path to the exercise directory or exercise ID
+    EXERCISE_PATH: Path to the run directory or run ID.
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
+    load_config_or_raise(config_manager)
 
+    manager = ExerciseManager(config_manager=config_manager)
+    exercise = manager.get_exercise(exercise_path)
+
+    if not exercise:
+        raise click.ClickException(f"Exercise not found: {exercise_path}")
+
+    metadata = exercise["metadata"]
+    console.print(Panel.fit(
+        f"[bold cyan]Roguelike Run[/bold cyan]\n\n"
+        f"ID: {exercise['id']}\n"
+        f"Topic: {metadata.get('topic', 'Unknown')}\n"
+        f"Language: {metadata.get('language', 'Unknown')}\n"
+        f"Type: {metadata.get('exercise_type', 'Unknown')}\n"
+        f"Difficulty: {metadata.get('difficulty', 'Unknown')}\n"
+        f"Status: {metadata.get('status', 'Unknown')}\n"
+        f"Path: {exercise['path']}",
+        border_style="cyan",
+    ))
+    console.print()
+
+    starter_file = exercise.get("starter_file")
+    if starter_file:
+        console.print(f"[cyan]Starter file:[/cyan] {starter_file}")
+
+    if not show_readme:
+        return
+
+    readme_path = Path(exercise["path"]) / ExerciseManager.README_FILE
+    if not readme_path.exists():
+        console.print("[yellow]README.md not found for this run.[/yellow]")
+        return
+
+    readme_content = readme_path.read_text(encoding="utf-8")
+    console.print()
+    console.print(Panel.fit("[bold]README.md[/bold]", border_style="blue"))
+    console.print()
+    console.print(Markdown(readme_content))
+    console.print()
+
+
+def _grade_run_submission(ctx: click.Context, exercise_path: str) -> None:
+    """Shared implementation for grading commands."""
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
+
+    manager = ExerciseManager(config_manager=config_manager)
+    exercise = manager.get_exercise(exercise_path)
+
+    if not exercise:
+        raise click.ClickException(f"Exercise not found: {exercise_path}")
+
+    # Read the submitted code
+    starter_file = exercise.get("starter_file")
+    if not starter_file:
+        raise click.ClickException("Could not find starter file in exercise.")
+
+    with open(starter_file, "r", encoding="utf-8") as f:
+        submitted_code = f.read()
+
+    console.print(Panel.fit(
+        f"[bold cyan]Reviewing Submission[/bold cyan]\n\n"
+        f"Exercise: {exercise['metadata'].get('topic', 'Unknown')}\n"
+        f"Type: {exercise['metadata'].get('exercise_type', 'Unknown')}",
+        border_style="cyan",
+    ))
+    console.print()
+    console.print("[dim]Analyzing your solution...[/dim]")
+    console.print()
+
+    # Review the submission
+    runtime = config_manager.get_llm_runtime()
+    api_key = runtime.api_key
+    model = runtime.model
+    provider = runtime.provider
+    base_url = runtime.base_url
+    experience_level = config_manager.get("experience_level", "intermediate")
+
+    manager.update_status(exercise_path, ExerciseManager.STATUS_SUBMITTED)
+
+    api_logger = start_api_logger(
+        config_manager,
+        "exercise_submit",
+        {
+            "exercise_id": exercise.get("id"),
+            "topic": exercise["metadata"].get("topic"),
+            "exercise_type": exercise["metadata"].get("exercise_type"),
+            "model": model,
+        },
+    )
+    log_api_calls = api_logger is not None
+
+    from .exercise_generator import ExerciseGenerator
+
+    generator = ExerciseGenerator(
+        api_key,
+        model,
+        provider=provider,
+        base_url=base_url,
+        logger=api_logger,
+        log_api_calls=log_api_calls,
+    )
     try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
-
-        manager = ExerciseManager(config_manager=config_manager)
-        exercise = manager.get_exercise(exercise_path)
-
-        if not exercise:
-            console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
-            sys.exit(1)
-
-        # Read the submitted code
-        starter_file = exercise.get("starter_file")
-        if not starter_file:
-            console.print("[red]Error:[/red] Could not find starter file in exercise.")
-            sys.exit(1)
-
-        with open(starter_file, "r") as f:
-            submitted_code = f.read()
-
-        console.print(Panel.fit(
-            f"[bold cyan]Reviewing Submission[/bold cyan]\n\n"
-            f"Exercise: {exercise['metadata'].get('topic', 'Unknown')}\n"
-            f"Type: {exercise['metadata'].get('exercise_type', 'Unknown')}",
-            border_style="cyan",
-        ))
-        console.print()
-        console.print("[dim]Analyzing your solution...[/dim]")
-        console.print()
-
-        # Review the submission
-        api_key = config_manager.get_api_key()
-        model = config_manager.get_model()
-        experience_level = config_manager.get("experience_level", "intermediate")
-
-        generator = ExerciseGenerator(api_key, model)
         review = generator.review_submission(
             original_exercise=exercise["metadata"],
             submitted_code=submitted_code,
             language=exercise["metadata"].get("language", "Python"),
             experience_level=experience_level,
         )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        end_api_logger(api_logger)
 
-        # Display the review
-        from rich.markdown import Markdown
-        md = Markdown(review.get("feedback", "No feedback available."))
-        console.print(Panel(md, border_style="green", title="Review Feedback"))
+    # Display the review
+    md = Markdown(review.feedback)
+    console.print(Panel(md, border_style="green", title="Review Feedback"))
 
-        # Update status
-        manager.update_status(exercise_path, ExerciseManager.STATUS_REVIEWED)
-        console.print()
-        console.print(f"[green]Exercise marked as reviewed.[/green]")
-
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error:[/red] {e}")
-        sys.exit(1)
+    # Update status
+    manager.update_status(exercise_path, ExerciseManager.STATUS_REVIEWED)
+    console.print()
+    console.print("[green]Exercise marked as reviewed.[/green]")
 
 
-@exercise.command("hint")
+@roguelike.command("submit")
+@click.argument("exercise_path")
+@click.pass_context
+def exercise_submit(ctx, exercise_path: str):
+    """Submit a run for grading.
+
+    EXERCISE_PATH: Path to the run directory or run ID.
+    """
+    _grade_run_submission(ctx, exercise_path)
+
+
+@roguelike.command("grade")
+@click.argument("exercise_path")
+@click.pass_context
+def exercise_grade(ctx, exercise_path: str):
+    """Alias of submit; grade a run by ID or path."""
+    _grade_run_submission(ctx, exercise_path)
+
+
+@roguelike.command("hint")
 @click.argument("exercise_path")
 @click.pass_context
 def exercise_hint(ctx, exercise_path: str):
-    """Get a hint for an exercise.
+    """Get a hint for a stored run.
 
-    EXERCISE_PATH: Path to the exercise directory or exercise ID
+    EXERCISE_PATH: Path to the run directory or run ID.
 
     Hints are revealed progressively. Each call reveals the next hint.
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
-    config_manager.load()
+    config_manager = get_config_manager_from_context(ctx)
+    load_config_or_raise(config_manager)
 
     manager = ExerciseManager(config_manager=config_manager)
     exercise = manager.get_exercise(exercise_path)
 
     if not exercise:
-        console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
-        sys.exit(1)
+        raise click.ClickException(f"Exercise not found: {exercise_path}")
 
     metadata = exercise["metadata"]
     hints = metadata.get("solution_hints", [])
@@ -772,27 +976,25 @@ def exercise_hint(ctx, exercise_path: str):
         manager.update_status(exercise_path, ExerciseManager.STATUS_IN_PROGRESS)
 
 
-@exercise.command("archive")
+@roguelike.command("archive")
 @click.argument("exercise_path")
 @click.option("--force", "-f", is_flag=True, help="Archive without confirmation")
 @click.pass_context
 def exercise_archive(ctx, exercise_path: str, force: bool):
-    """Archive a completed exercise.
+    """Archive a completed run.
 
-    EXERCISE_PATH: Path to the exercise directory or exercise ID
+    EXERCISE_PATH: Path to the run directory or run ID.
 
     Archived exercises are moved to the 'archived' subdirectory.
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
-    config_manager.load()
+    config_manager = get_config_manager_from_context(ctx)
+    load_config_or_raise(config_manager)
 
     manager = ExerciseManager(config_manager=config_manager)
     exercise = manager.get_exercise(exercise_path)
 
     if not exercise:
-        console.print(f"[red]Error:[/red] Exercise not found: {exercise_path}")
-        sys.exit(1)
+        raise click.ClickException(f"Exercise not found: {exercise_path}")
 
     if not force:
         if not Confirm.ask(f"Archive exercise '{exercise['id']}'?", default=False):
@@ -800,10 +1002,14 @@ def exercise_archive(ctx, exercise_path: str, force: bool):
             return
 
     if manager.archive_exercise(exercise_path):
-        console.print(f"[green]Exercise archived successfully.[/green]")
+        console.print("[green]Exercise archived successfully.[/green]")
     else:
-        console.print(f"[red]Failed to archive exercise.[/red]")
-        sys.exit(1)
+        raise click.ClickException("Failed to archive exercise.")
+
+
+for alias, target in COMMAND_ALIASES.items():
+    if target == "roguelike":
+        main.add_command(roguelike, name=alias)
 
 
 @main.group()
@@ -838,35 +1044,22 @@ def proof_review(ctx, file_path: str, domain: Optional[str], level: Optional[str
 
     Supported formats: .txt, .md, .tex, .lean, .v (Coq), .agda, .thy (Isabelle)
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
 
-    try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
+    # Check if file type is supported
+    reader = ProofReader()
+    if not reader.is_supported(file_path):
+        supported_formats = ", ".join(reader.SUPPORTED_EXTENSIONS.keys())
+        raise click.ClickException(
+            f"Unsupported file type.\nSupported formats: {supported_formats}"
+        )
 
-        # Check if file type is supported
-        reader = ProofReader()
-        if not reader.is_supported(file_path):
-            console.print(f"[red]Error:[/red] Unsupported file type.")
-            console.print(f"Supported formats: {', '.join(reader.SUPPORTED_EXTENSIONS.keys())}")
-            sys.exit(1)
+    # Start proof review session
+    from .proof_session import ProofSession
 
-        # Start proof review session
-        session = ProofSession(config_manager, console)
-        session.start_review(file_path, domain=domain, experience_level=level)
-
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error:[/red] {e}")
-        sys.exit(1)
+    session = ProofSession(config_manager, console)
+    session.start_review(file_path, domain=domain, experience_level=level)
 
 
 @proof.command("teach")
@@ -887,28 +1080,14 @@ def proof_teach(ctx, domain: Optional[str]):
       - Understanding of common proof pitfalls
       - Ability to spot logical gaps
     """
-    config_dir = ctx.obj.get("config_dir")
-    config_manager = ConfigManager(Path(config_dir) if config_dir else None)
+    config_manager = get_config_manager_from_context(ctx)
+    ensure_configured(config_manager)
 
-    try:
-        config_manager.load()
-        if not config_manager.is_configured():
-            console.print(
-                "[red]Error:[/red] Code Tutor is not configured.\n"
-                "Run 'code-tutor setup' first."
-            )
-            sys.exit(1)
+    # Start proof teaching session
+    from .proof_session import ProofTeachingSession
 
-        # Start proof teaching session
-        session = ProofTeachingSession(config_manager, console)
-        session.start_session(domain=domain)
-
-    except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Unexpected error:[/red] {e}")
-        sys.exit(1)
+    session = ProofTeachingSession(config_manager, console)
+    session.start_session(domain=domain)
 
 
 @proof.command("info")
